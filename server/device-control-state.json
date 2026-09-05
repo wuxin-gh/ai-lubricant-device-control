@@ -1,0 +1,28 @@
+{
+  "devices": [
+    {
+      "device_id": "dev_lJOQ-vCE9su7BZ9cTVi5GA",
+      "token_sha256": "59a9b606a7df5c191d7a0de37a2f55035738410b5ab4236f558a528a2fbb6c6c",
+      "label": "Huawei P40 Pro retry",
+      "created_at": "2026-08-25T00:05:49.5246671Z",
+      "capabilities": [
+        "get_screen_state",
+        "tap",
+        "long_press",
+        "double_tap",
+        "swipe",
+        "scroll",
+        "scroll_to_node",
+        "set_text",
+        "press_key",
+        "dismiss_keyboard",
+        "press_back",
+        "press_home",
+        "press_recents",
+        "open_app",
+        "list_apps"
+      ],
+      "last_seen": "2026-08-25T01:33:42.8619908Z"
+    }
+  ]
+}
