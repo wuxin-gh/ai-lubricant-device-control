@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App identity -->
+    <string name="app_name" translatable="false">Device Control</string>
+
+    <!-- Accessibility service UI strings -->
+    <string name="accessibility_service_label" translatable="false">Device Control 服务</string>
+    <string name="accessibility_service_description" translatable="false">远程控制 Android 设备的无障碍服务。必须在设置 → 辅助功能 → 设备控制 启用。</string>
+
+    <!-- Foreground service notification: subtype is shown to users/reviewers explaining
+         why a specialUse FGS runs. Keep it short and descriptive. -->
+    <string name="fgs_subtype" translatable="false">websocket_device_control</string>
+    <string name="foreground_service_title" translatable="false">正在被远程控制</string>
+    <string name="foreground_service_text" translatable="false">与设备配对后，此通知会显示远程控制状态。</string>
+    <string name="notification_channel_name" translatable="false">远程控制</string>
+
+    <!-- MainActivity -->
+    <string name="status_disconnected" translatable="false">未连接</string>
+    <string name="status_connecting" translatable="false">连接中…</string>
+    <string name="status_connected" translatable="false">已连接</string>
+    <string name="status_pairing" translatable="false">配对中…</string>
+    <string name="access_settings" translatable="false">无障碍服务设置</string>
+    <string name="enable_accessibility" translatable="false">请先启用无障碍服务</string>
+    <string name="pair_hint" translatable="false">输入配对码</string>
+    <string name="pair_invalid_code" translatable="false">配对码无效或已过期，请重新生成</string>
+    <string name="pair_succeeded" translatable="false">配对成功，正在连接设备</string>
+    <string name="fatal_version_mismatch" translatable="false">协议版本不匹配，请升级 app</string>
+    <string name="pairing" translatable="false">配对并连接</string>
+    <string name="connect" translatable="false">连接</string>
+    <string name="disconnect" translatable="false">断开</string>
+    <string name="unpair" translatable="false">解除配对</string>
+    <string name="server_url_hint" translatable="false">服务器地址（填域名即可，如 https://host）</string>
+    <string name="pairing_code_hint" translatable="false">配对码（自动格式化为 XXXX-XXXX）</string>
+    <string name="accessibility_disabled" translatable="false">无障碍服务未启用</string>
+    <string name="accessibility_enabled" translatable="false">无障碍服务已启用</string>
+    <string name="open_accessibility_settings" translatable="false">打开无障碍设置</string>
+    <string name="device_id_label" translatable="false">设备 ID：</string>
+    <string name="no_credential" translatable="false">尚未配对，请填写地址和配对码</string>
+</resources>

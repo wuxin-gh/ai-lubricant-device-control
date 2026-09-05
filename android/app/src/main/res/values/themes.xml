@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The launcher-icon colors were previously reused as theme colors, which made
+         colorPrimary and colorOnPrimary nearly identical: filled buttons drew a light
+         grey label on a light grey background and were unreadable. Buttons now use a
+         dedicated accent pair with real contrast. -->
+    <style name="Theme.DeviceControl" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorOnPrimary">@color/on_primary</item>
+    </style>
+</resources>

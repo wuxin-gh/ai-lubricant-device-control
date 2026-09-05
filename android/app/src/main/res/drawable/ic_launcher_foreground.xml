@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple phone silhouette with a control dot. -->
+    <path
+        android:fillColor="#E0E0E0"
+        android:pathData="M38,26 h32 a4,4 0 0 1 4,4 v48 a4,4 0 0 1 -4,4 h-32 a4,4 0 0 1 -4,-4 v-48 a4,4 0 0 1 4,-4 z" />
+    <path
+        android:fillColor="#1F1F1F"
+        android:pathData="M42,32 h24 v36 h-24 z" />
+    <path
+        android:fillColor="#4CAF50"
+        android:pathData="M54,74 m-3,0 a3,3 0 1 0 6,0 a3,3 0 1 0 -6,0" />
+</vector>

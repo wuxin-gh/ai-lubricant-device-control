@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- allowBackup=false in the manifest already blocks full backup. This file is
+     the Android 12+ knob for what restore may extract; empty = nothing leaves
+     the device. Token stays on-device. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Intentionally empty: never back up credentials or pairing state. -->
+    </cloud-backup>
+    <device-transfer>
+        <!-- Intentionally empty: no device-to-device transfer of credentials. -->
+    </device-transfer>
+</data-extraction-rules>

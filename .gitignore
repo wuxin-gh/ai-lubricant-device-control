@@ -1,0 +1,42 @@
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
+
+# Build outputs
+build/
+dist/
+out/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Gradle / Android
+.gradle/
+local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/core/build/
+android/captures/
+android/.cxx/
+
+# Node / server (if TS later)
+node_modules/
+*.log
+
+# Secrets / local config — never commit device credentials or server addresses
+.env
+.env.*
+secrets/
+deploy/
+config.local.*
+.claude/
+.venv/
+build/
+.gradle/
+local.properties
+server/device-control-state.json

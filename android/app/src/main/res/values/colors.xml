@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#1F1F1F</color>
+    <color name="ic_launcher_foreground">#E0E0E0</color>
+
+    <!-- Button/accent palette. colorPrimary and colorOnPrimary MUST contrast: a filled
+         Material3 button paints its background with the former and its label with the
+         latter, so equal values render an unreadable button. -->
+    <color name="primary">#1565C0</color>
+    <color name="on_primary">#FFFFFF</color>
+</resources>

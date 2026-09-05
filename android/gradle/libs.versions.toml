@@ -1,0 +1,50 @@
+[versions]
+# Pinned to match android-remote-control-mcp (PLAN.md §2 reuse source). The
+# vendored core/ sources were written against these versions; bumping them is a
+# deliberate task, not a drive-by, because the reused code must still compile.
+agp = "9.3.1"
+kotlin = "2.4.10"
+kotlinx-coroutines = "1.10.2"
+kotlinx-serialization = "1.10.0"
+javax-inject = "1"
+androidx-core = "1.13.1"
+appcompat = "1.7.0"
+material = "1.12.0"
+activity = "1.9.3"
+okhttp = "4.12.0"
+# The vendored ARC-MCP tests are JUnit 5 + mockk; these track that source so the
+# tests can come across unmodified.
+junit5 = "5.13.4"
+mockk = "1.14.9"
+robolectric = "4.13"
+
+[libraries]
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+
+# The vendored ARC-MCP sources annotate constructors with @Inject. We take the
+# annotations only — no Dagger/Hilt runtime, no DI graph (PLAN.md §2 drops the
+# MCP/DI wiring). core/ exposes plain constructors the app can call directly.
+javax-inject = { group = "javax.inject", name = "javax.inject", version.ref = "javax-inject" }
+
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "androidx-core" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", version.ref = "activity" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+
+junit-bom = { group = "org.junit", name = "junit-bom", version.ref = "junit5" }
+junit-jupiter-api = { group = "org.junit.jupiter", name = "junit-jupiter-api" }
+junit-jupiter-engine = { group = "org.junit.jupiter", name = "junit-jupiter-engine" }
+junit-jupiter-params = { group = "org.junit.jupiter", name = "junit-jupiter-params" }
+junit-platform-launcher = { group = "org.junit.platform", name = "junit-platform-launcher" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+
+[plugins]
+android-library = { id = "com.android.library", version.ref = "agp" }
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

@@ -1,0 +1,19 @@
+# device-control — NOTICE
+
+This project incorporates code derived from the following open-source projects.
+All required copyright and license notices are retained per their licenses.
+
+## android-remote-control-mcp
+
+- Source: https://github.com/danielealbano/android-remote-control-mcp
+- License: MIT
+- Used in: android/core (accessibility tree parsing, action execution,
+  element finding, screen capture + annotation, on-device privacy redaction)
+- Original copyright: Copyright 2026-2027 Daniele Salvatore Albano
+  (as stated in the project's LICENSE.md)
+
+## mobile-mcp (design reference only)
+
+- Source: https://github.com/mobile-next/mobile-mcp
+- License: MIT (referenced for design; no code copied into this repo)
+- Used as: reference for the platform-agnostic command vocabulary (Robot interface)
