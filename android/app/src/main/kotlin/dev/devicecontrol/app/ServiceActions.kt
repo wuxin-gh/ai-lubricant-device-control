@@ -9,6 +9,7 @@ object ServiceActions {
     const val ACTION_PAIR = "dev.devicecontrol.action.PAIR"
     const val ACTION_UNPAIR = "dev.devicecontrol.action.UNPAIR"
     const val ACTION_DISCONNECT = "dev.devicecontrol.action.DISCONNECT"
+    const val ACTION_CONNECT = "dev.devicecontrol.action.CONNECT"
     const val EXTRA_URL = "url"
     const val EXTRA_CODE = "code"
 }

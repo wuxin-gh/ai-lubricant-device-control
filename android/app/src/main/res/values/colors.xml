@@ -8,4 +8,8 @@
          latter, so equal values render an unreadable button. -->
     <color name="primary">#1565C0</color>
     <color name="on_primary">#FFFFFF</color>
+
+    <!-- 配对码单格输入框：聚焦描边主色 + 12% 主色淡底，未聚焦灰描边。 -->
+    <color name="primary_12">#1F1565C0</color>
+    <color name="pair_box_stroke">#9AA0A6</color>
 </resources>

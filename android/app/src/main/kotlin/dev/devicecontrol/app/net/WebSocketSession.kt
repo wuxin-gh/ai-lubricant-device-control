@@ -48,7 +48,12 @@ internal val WireJson: Json = Json {
  */
 class WebSocketSession {
     var ws: WebSocket? = null
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** 会话内任务（心跳/命令处理）的兜底异常处理器：记日志，不让异常带崩进程。 */
+    private val sessionGuard = kotlinx.coroutines.CoroutineExceptionHandler { _, t ->
+        android.util.Log.e("DC:WsSession", "session task failed", t)
+    }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + sessionGuard)
     private val registered = CompletableDeferred<RegisteredFrame>()
     private val inbound = Channel<InboundFrame>(Channel.UNLIMITED)
     private val _open = MutableStateFlow(false)
@@ -68,12 +73,15 @@ class WebSocketSession {
     /**
      * Waits up to [timeoutMs] for `registered` or a close. Returns [RegisteredResult.Closed]
      * if the connection ended before `registered` arrived.
+     *
+     * 连接在 `registered` 到达前断开时，[onClose] 会把 deferred
+     * `completeExceptionally`——直接 `await()` 会把 [ClosedBeforeRegister] 抛进调用方，
+     * 而服务 scope 没有异常处理器，未捕获异常就是进程崩溃。这里吞掉异常按状态归类。
      */
     suspend fun waitForRegisteredOrClose(timeoutMs: Long): RegisteredResult {
-        val won = withTimeoutOrNull(timeoutMs) { registered.await() }
+        val won = runCatching { withTimeoutOrNull(timeoutMs) { registered.await() } }.getOrNull()
         return when {
             won != null -> RegisteredResult.Registered(won)
-            registered.isCompleted -> RegisteredResult.Registered(registered.getCompleted())
             !isOpen -> RegisteredResult.Closed
             else -> RegisteredResult.Timeout
         }
@@ -129,41 +137,55 @@ sealed class InboundFrame {
  */
 class SessionListener(
     private val session: WebSocketSession,
+    private val url: String = "<unknown>",
 ) : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
         session.ws = webSocket
         session.onOpen()
+        android.util.Log.i("DC:WsSession", "onOpen url=$url respCode=${response.code}")
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
-        val type = parseType(text) ?: return
-        when (type) {
-            "registered" -> {
-                val frame = WireJson.decodeFromString(RegisteredFrame.serializer(), text)
-                session.onRegistered(frame)
+        // §3：坏帧/无法解析的帧直接忽略。绝不让异常从 OkHttp 回调线程逃逸——
+        // 未捕获异常会带崩 OkHttp reader 线程乃至整个进程。
+        try {
+            val type = parseType(text) ?: return
+            when (type) {
+                "registered" -> {
+                    val frame = WireJson.decodeFromString(RegisteredFrame.serializer(), text)
+                    android.util.Log.i("DC:WsSession", "registered device=${frame.deviceId} caps=${frame.acceptedCapabilities}")
+                    session.onRegistered(frame)
+                }
+                "call" -> {
+                    val frame = WireJson.decodeFromString(CallFrame.serializer(), text)
+                    session.onInbound(InboundFrame.Call(frame))
+                }
+                "call-cancel" -> {
+                    val requestId = WireJson.parseToJsonElement(text)
+                        .jsonObject["request_id"]?.jsonPrimitive?.contentOrNull ?: return
+                    session.onInbound(InboundFrame.CallCancel(requestId))
+                }
+                else -> session.onInbound(InboundFrame.Unknown(type))
             }
-            "call" -> {
-                val frame = WireJson.decodeFromString(CallFrame.serializer(), text)
-                session.onInbound(InboundFrame.Call(frame))
-            }
-            "call-cancel" -> {
-                val requestId = WireJson.parseToJsonElement(text)
-                    .jsonObject["request_id"]?.jsonPrimitive?.contentOrNull ?: return
-                session.onInbound(InboundFrame.CallCancel(requestId))
-            }
-            else -> session.onInbound(InboundFrame.Unknown(type))
+        } catch (t: Exception) {
+            android.util.Log.w("DC:WsSession", "dropping malformed frame", t)
         }
     }
 
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+        android.util.Log.i("DC:WsSession", "onClosing code=$code reason=$reason")
         webSocket.close(1000, null)
     }
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+        android.util.Log.i("DC:WsSession", "onClosed code=$code reason=$reason")
         session.onClose(code)
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+        // 之前静默——拨号失败（超时/拒连/代理挡 WS 升级/证书…）只 onClose(-1)，
+        // logcat 一个字都没有。打全异常，第一眼看到死因。
+        android.util.Log.e("DC:WsSession", "onFailure url=$url respCode=${response?.code}", t)
         session.onClose(-1)
     }
 

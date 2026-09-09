@@ -3,6 +3,7 @@ package devicelink
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/danielpaulus/go-ios/ios/forward"
 	"github.com/danielpaulus/go-ios/ios/installationproxy"
 	"github.com/danielpaulus/go-ios/ios/testmanagerd"
+	"github.com/danielpaulus/go-ios/ios/tunnel"
 
 	"device-control/ios/internal/wda"
 )
@@ -177,8 +179,81 @@ func pickDevice(opts Options) (ios.DeviceEntry, error) {
 		if opts.Transport == "usb" && d.Properties.ConnectionType == "Network" {
 			continue
 		}
-		return d, nil
+		return enrichWithTunnel(d)
 	}
 	return ios.DeviceEntry{}, fmt.Errorf("no device matching udid=%q transport=%q",
 		opts.UDID, opts.Transport)
+}
+
+// enrichWithTunnel fills the RSD tunnel details on iOS 17+ devices, which the
+// XCTest runner (RunTestWithConfig → NewTunnelConnection) requires to reach the
+// device's remote services. ios.ListDevices() never populates DeviceEntry.Rsd —
+// that only comes from a running go-ios tunnel agent — so a bare iOS 17+ device
+// makes RunTestWithConfig fail with "missing tunnel address and RSD port".
+//
+// Older iOS (<17) tunnels over usbmuxd directly and needs no enrichment, so the
+// device is returned untouched. On 17+ the local tunnel-info agent (started by
+// node-ios) is queried; its address/RSD port are attached exactly as the go-ios
+// CLI's deviceWithRsdProvider does. A missing or not-yet-ready tunnel is a hard
+// error here rather than a silent pass-through: launching WDA without it would
+// only fail later with a far less actionable message.
+func enrichWithTunnel(d ios.DeviceEntry) (ios.DeviceEntry, error) {
+	if d.SupportsRsd() {
+		return d, nil // already has an RSD provider (e.g. injected by a caller)
+	}
+	if d.Properties.ConnectionType == "Network" {
+		// Network devices can't tunnel; go-ios reaches them over the LAN address.
+		return d, nil
+	}
+
+	version, err := ios.GetProductVersion(d)
+	if err != nil {
+		return ios.DeviceEntry{}, fmt.Errorf("read iOS version for %s: %w", d.Properties.SerialNumber, err)
+	}
+	if version.Major() < 17 {
+		// iOS <17 tunnels over usbmuxd directly; no RSD tunnel is involved.
+		return d, nil
+	}
+
+	udid := d.Properties.SerialNumber
+	host := ios.HttpApiHost()
+	port := ios.HttpApiPort()
+
+	info, err := tunnel.TunnelInfoForDevice(udid, host, port)
+	if err != nil {
+		if errors.Is(err, tunnel.ErrTunnelNotFound) {
+			return ios.DeviceEntry{}, fmt.Errorf(
+				"no RSD tunnel for iOS %s device %s: the go-ios tunnel agent has not started it yet (userspace tunnels need iOS 17.4+; 17.0–17.3 require a root tunnel agent)",
+				version.String(), udid)
+		}
+		return ios.DeviceEntry{}, fmt.Errorf("query tunnel info for %s at %s:%d: %w", udid, host, port, err)
+	}
+
+	// Replicate go-ios CLI deviceWithRsdProvider: dial the device over the
+	// tunnel, RSD-handshake to learn its service ports, and stamp them onto the
+	// entry. UserspaceTUN details come from the tunnel-info response (the agent
+	// runs userspace tunnels), and the userspace host is the agent host.
+	d.UserspaceTUN = info.UserspaceTUN
+	d.UserspaceTUNHost = host
+	d.UserspaceTUNPort = info.UserspaceTUNPort
+
+	rsdService, err := ios.NewWithAddrPortDevice(info.Address, info.RsdPort, d)
+	if err != nil {
+		return ios.DeviceEntry{}, fmt.Errorf("connect RSD for %s at [%s]:%d: %w", udid, info.Address, info.RsdPort, err)
+	}
+	defer rsdService.Close()
+	rsdProvider, err := rsdService.Handshake()
+	if err != nil {
+		return ios.DeviceEntry{}, fmt.Errorf("RSD handshake for %s at [%s]:%d: %w", udid, info.Address, info.RsdPort, err)
+	}
+	enriched, err := ios.GetDeviceWithAddress(udid, info.Address, rsdProvider)
+	if err != nil {
+		return ios.DeviceEntry{}, fmt.Errorf("resolve device %s with RSD address: %w", udid, err)
+	}
+	// GetDeviceWithAddress re-lists the device fresh, so carry the userspace TUN
+	// fields over — otherwise ConnectTUNDevice can't reach the userspace agent.
+	enriched.UserspaceTUN = d.UserspaceTUN
+	enriched.UserspaceTUNHost = d.UserspaceTUNHost
+	enriched.UserspaceTUNPort = d.UserspaceTUNPort
+	return enriched, nil
 }

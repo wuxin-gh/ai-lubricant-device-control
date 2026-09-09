@@ -17,12 +17,29 @@
          on Android 13+. Denied only degrades the notification, not the connection. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- In-app update: the app downloads the new APK from the marketplace and hands it
+         to the system package installer. REQUEST_INSTALL_PACKAGES is required for the
+         installer to appear (user still confirms "install unknown apps" per app). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- list_apps enumerates installed launchables via PackageManager. On Android 11+
          this is the broad-query permission; without it only the handful of packages
          visible to the app via intent-filters are returned. -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
+
+    <!-- Battery-optimization exemption: Chinese ROMs (MIUI/ColorOS/OriginOS/…)
+         aggressively kill background processes on screen-off / memory sweeps, and
+         the a11y service is bound into THIS app's process — kill the process and
+         both the control connection and the a11y binding die together. The
+         whitelist dialog needs this permission. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Autostart after boot: re-dial the server without the user manually
+         launching the app. BOOT_COMPLETED is a protected broadcast and is on the
+         allowlist for starting a foreground service from the background. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name=".ControlApplication"
@@ -33,7 +50,25 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.DeviceControl">
+        android:theme="@style/Theme.DeviceControl"
+        android:usesCleartextTraffic="true">
+        <!-- usesCleartextTraffic：服务端地址由用户自填，内网自建部署
+             （http://内网IP:端口）没有 TLS；默认禁明文会让 OkHttp 的
+             POST /pair 与 ws:// 握手直接 CLEARTEXT not permitted，
+             请求根本出不了手机（服务端日志看不到任何调用）。此处放开
+             明文许可；填 https://wss:// 时仍正常走 TLS，不受影响。 -->
+
+        <!-- FileProvider: shares the downloaded update APK with the system installer
+             (the installer runs in another process and cannot read our private files). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <activity
             android:name=".ui.MainActivity"
@@ -74,7 +109,21 @@
                 <action android:name="dev.devicecontrol.action.PAIR" />
                 <action android:name="dev.devicecontrol.action.UNPAIR" />
                 <action android:name="dev.devicecontrol.action.DISCONNECT" />
+                <action android:name="dev.devicecontrol.action.CONNECT" />
             </intent-filter>
         </service>
+
+        <!-- Autostart after boot: if the device is paired, re-dial without a manual
+             app launch. exported="true" is required to receive the (protected,
+             system-only) BOOT_COMPLETED broadcast. Some ROMs additionally gate this
+             behind their own "自启动" switch — MainActivity links to those settings. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

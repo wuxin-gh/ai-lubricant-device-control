@@ -29,11 +29,26 @@
     <string name="connect" translatable="false">连接</string>
     <string name="disconnect" translatable="false">断开</string>
     <string name="unpair" translatable="false">解除配对</string>
-    <string name="server_url_hint" translatable="false">服务器地址（填域名即可，如 https://host）</string>
-    <string name="pairing_code_hint" translatable="false">配对码（自动格式化为 XXXX-XXXX）</string>
+    <string name="server_url_hint" translatable="false">服务器地址（只填地址即可，如 http://192.168.1.10:8001，无需填路径）</string>
+    <string name="local_info_label" translatable="false">本机信息</string>
+    <string name="pairing_code_label" translatable="false">配对码</string>
     <string name="accessibility_disabled" translatable="false">无障碍服务未启用</string>
-    <string name="accessibility_enabled" translatable="false">无障碍服务已启用</string>
+    <string name="accessibility_enabled_running" translatable="false">无障碍服务已启用（运行中）</string>
+    <string name="accessibility_enabled_not_running" translatable="false">无障碍已开启但服务未运行——进程可能被系统清理，返回桌面再进本页或在系统设置里关一次再开即可恢复</string>
     <string name="open_accessibility_settings" translatable="false">打开无障碍设置</string>
+    <string name="battery_status_whitelisted" translatable="false">已加入电池优化白名单（推荐，后台不易被杀）</string>
+    <string name="battery_status_not_whitelisted" translatable="false">未加入电池优化白名单，锁屏后容易被系统清理导致掉线</string>
+    <string name="battery_optimize_btn" translatable="false">申请加入电池优化白名单</string>
+    <string name="oem_background_btn" translatable="false">厂商后台设置（自启动/省电）</string>
     <string name="device_id_label" translatable="false">设备 ID：</string>
     <string name="no_credential" translatable="false">尚未配对，请填写地址和配对码</string>
+    <string name="check_update" translatable="false">检查更新</string>
+    <string name="update_checking" translatable="false">正在检查更新…</string>
+    <string name="update_up_to_date" translatable="false">已是最新版本（%1$s）</string>
+    <string name="update_available" translatable="false">发现新版本 %1$s，正在下载…</string>
+    <string name="update_download_started" translatable="false">正在下载新版本 %1$s…</string>
+    <string name="update_download_failed" translatable="false">下载失败：%1$s</string>
+    <string name="update_confirm_install" translatable="false">新版本 %1$s 已下载，点击安装</string>
+    <string name="update_check_failed" translatable="false">检查更新失败：%1$s</string>
+    <string name="update_check_no_server" translatable="false">尚未配对，请先填写服务器地址完成配对</string>
 </resources>

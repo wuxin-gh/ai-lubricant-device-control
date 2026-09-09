@@ -32,6 +32,11 @@ implemented and tested:
 - ✅ **WDA runtime**: `internal/devicelink` uses go-ios v1.3.2 with standard WDA
   session protocol (GET /status, POST /session, W3C Actions for taps/swipes),
   dynamic port forwarding, and automatic scale/bounds detection.
+- ✅ **iOS 17+ RSD tunnel**: `node-ios` embeds go-ios's TunnelManager in
+  userspace mode (no root/sudo): tunnels come up automatically for attached USB
+  iPhones (17.4+; 17.0–17.3 need a root tunnel agent and are reported as
+  unsupported), and `devicelink` attaches the RSD provider before every WDA
+  launch, so 17+ devices need no separate `ios tunnel start` process.
 - ✅ **iOS host node** (`nodes/ios/`): NodeConnect-based control plane with
   device discovery, automated claim flow, WDA signing/installation/renewal jobs,
   and multi-device orchestration.

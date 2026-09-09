@@ -11,13 +11,31 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <TextView
-            android:layout_width="wrap_content"
+        <!-- 标题 + 当前已装版本号：用户排障时第一眼确认手机上跑的是哪个版本 -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textSize="22sp"
-            android:textStyle="bold"
-            android:paddingBottom="8dp" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:paddingBottom="8dp" />
+
+            <TextView
+                android:id="@+id/app_version"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:paddingBottom="8dp"
+                android:textColor="@android:color/darker_gray"
+                android:textSize="12sp"
+                tools:text="v0.1.4" />
+        </LinearLayout>
 
         <!-- Accessibility status -->
         <TextView
@@ -34,6 +52,57 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/open_accessibility_settings" />
+
+        <!-- Battery-optimization whitelist: the #1 kill switch on Chinese ROMs.
+             Without it the FGS (and the a11y service bound into the same process)
+             is force-stopped on screen-off. Status + request button. -->
+        <TextView
+            android:id="@+id/battery_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            tools:text="@string/battery_status_not_whitelisted"
+            tools:ignore="MissingDefaultResource" />
+
+        <Button
+            android:id="@+id/battery_btn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/battery_optimize_btn" />
+
+        <!-- OEM autostart / power settings: Chinese ROMs gate background survival
+             behind their own managers, independent of the standard whitelist above. -->
+        <Button
+            android:id="@+id/oem_background_btn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/oem_background_btn" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="16dp"
+            android:background="?android:attr/listDivider" />
+
+        <!-- 本机信息：配对前/后都显示（型号 / 系统 / 内网 IP / App 版本）。
+             让用户在配对当下就能核对自己手机的网段与版本，排障时一目了然。 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingBottom="4dp"
+            android:text="@string/local_info_label"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/local_info"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="12dp"
+            android:fontFamily="monospace"
+            android:textSize="12sp"
+            android:textColor="@android:color/darker_gray"
+            tools:text="型号：\n系统：\n内网 IP：\nApp 版本：" />
 
         <View
             android:layout_width="match_parent"
@@ -58,17 +127,159 @@
                 android:autofillHints=""
                 android:text="" />
 
-            <EditText
-                android:id="@+id/pairing_code"
-                android:layout_width="match_parent"
+            <!-- 配对码：8 格独立输入框，视觉 4-4 分组（XXXX-XXXX）。
+                 每格 1 字符（A-Z0-9），输完自动跳格，末格填满启用配对按钮。 -->
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:hint="@string/pairing_code_hint"
-                android:inputType="textCapCharacters"
-                android:maxLength="9"
-                android:singleLine="true"
-                android:imeOptions="actionDone"
-                android:autofillHints=""
-                android:text="" />
+                android:labelFor="@id/pairing_code_boxes"
+                android:paddingTop="8dp"
+                android:paddingBottom="4dp"
+                android:text="@string/pairing_code_label" />
+
+            <LinearLayout
+                android:id="@+id/pairing_code_boxes"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:orientation="horizontal">
+
+                <EditText
+                    android:id="@+id/pair_code_0"
+                    android:layout_width="32dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/pair_code_box"
+                    android:gravity="center"
+                    android:imeOptions="actionNext"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="1"
+                    android:maxLines="1"
+                    android:padding="0dp"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/pair_code_1"
+                    android:layout_width="32dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/pair_code_box"
+                    android:gravity="center"
+                    android:imeOptions="actionNext"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="1"
+                    android:maxLines="1"
+                    android:padding="0dp"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/pair_code_2"
+                    android:layout_width="32dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/pair_code_box"
+                    android:gravity="center"
+                    android:imeOptions="actionNext"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="1"
+                    android:maxLines="1"
+                    android:padding="0dp"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/pair_code_3"
+                    android:layout_width="32dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/pair_code_box"
+                    android:gravity="center"
+                    android:imeOptions="actionNext"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="1"
+                    android:maxLines="1"
+                    android:padding="0dp"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:layout_marginHorizontal="4dp"
+                    android:gravity="center"
+                    android:text="-"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/pair_code_4"
+                    android:layout_width="32dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/pair_code_box"
+                    android:gravity="center"
+                    android:imeOptions="actionNext"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="1"
+                    android:maxLines="1"
+                    android:padding="0dp"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/pair_code_5"
+                    android:layout_width="32dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/pair_code_box"
+                    android:gravity="center"
+                    android:imeOptions="actionNext"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="1"
+                    android:maxLines="1"
+                    android:padding="0dp"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/pair_code_6"
+                    android:layout_width="32dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="4dp"
+                    android:background="@drawable/pair_code_box"
+                    android:gravity="center"
+                    android:imeOptions="actionNext"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="1"
+                    android:maxLines="1"
+                    android:padding="0dp"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <EditText
+                    android:id="@+id/pair_code_7"
+                    android:layout_width="32dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/pair_code_box"
+                    android:gravity="center"
+                    android:imeOptions="actionDone"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="1"
+                    android:maxLines="1"
+                    android:padding="0dp"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
             <Button
                 android:id="@+id/pair_btn"
@@ -89,7 +300,9 @@
                 android:id="@+id/device_id"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:paddingBottom="8dp"
+                android:paddingBottom="4dp"
+                android:fontFamily="monospace"
+                android:textSize="12sp"
                 tools:text="@string/device_id_label"
                 tools:ignore="MissingDefaultResource" />
 
@@ -98,8 +311,15 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingBottom="8dp"
+                android:textStyle="bold"
                 tools:text="@string/status_connected"
                 tools:ignore="MissingDefaultResource" />
+
+            <Button
+                android:id="@+id/check_update_btn"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/check_update" />
 
             <Button
                 android:id="@+id/disconnect_btn"
