@@ -114,17 +114,24 @@ func startGoIOS(ctx context.Context, opts Options) (deviceSession, error) {
 
 	s := &goiosSession{device: device, hostPort: hostPort, runnerErr: make(chan error, 1)}
 
-	// Launch the WDA runner on a cancellable context; RunTestWithConfig blocks
-	// for the test lifetime and returns when the context is cancelled.
-	wdaCtx, cancel := context.WithCancel(ctx)
+	// Launch the automation runner on a cancellable context; RunTestWithConfig
+	// blocks for the test lifetime and returns when the context is cancelled.
+	runnerCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 
-	// USE_PORT pins WDA's device-side HTTP port so the forward target is
-	// deterministic (no log parsing). WDA reads USE_PORT on startup.
+	// The runner's device-side port is fixed by the backend (DeviceKit listens
+	// on 12004; WDA was pinned via USE_PORT=8100). DeviceKit does not read
+	// USE_PORT — go-ios's own `ui run devicekit` forwards straight to 12004 —
+	// so only the WDA driver keeps the env.
 	listener := testmanagerd.NewTestListener(&s.log, &s.log, "")
-	env := map[string]any{"USE_PORT": fmt.Sprint(wda.DeviceWDAPort)}
+	var env map[string]any
+	devicePort := DeviceKitDevicePort
+	if opts.RunnerDriver == "wda" {
+		env = map[string]any{"USE_PORT": fmt.Sprint(wda.DeviceWDAPort)}
+		devicePort = wda.DeviceWDAPort
+	}
 	go func() {
-		_, err := testmanagerd.RunTestWithConfig(wdaCtx, testmanagerd.TestConfig{
+		_, err := testmanagerd.RunTestWithConfig(runnerCtx, testmanagerd.TestConfig{
 			TestRunnerBundleId: opts.WDABundleID,
 			XctestConfigName:   opts.XCTestConfig,
 			Device:             device,
@@ -136,23 +143,23 @@ func startGoIOS(ctx context.Context, opts Options) (deviceSession, error) {
 
 	// Bind the forward immediately: go-ios accepts host connections and opens
 	// the device-side socket lazily per connection, so the listener is safe to
-	// create before WDA binds its port; the readiness probe retries anyway.
-	fwd, err := forward.Forward(device, uint16(hostPort), uint16(wda.DeviceWDAPort))
+	// create before the runner binds its port; the readiness probe retries anyway.
+	fwd, err := forward.Forward(device, uint16(hostPort), uint16(devicePort))
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("forward WDA port %d → device:%d: %w", hostPort, wda.DeviceWDAPort, err)
+		return nil, fmt.Errorf("forward runner port %d → device:%d: %w", hostPort, devicePort, err)
 	}
 	s.forward = fwd
 
-	// Early-exit: if the runner dies before WDA ever binds, surface that rather
+	// Early-exit: if the runner dies before it ever binds, surface that rather
 	// than letting the caller's readiness wait time out silently.
 	select {
 	case runErr := <-s.runnerErr:
 		_ = s.Close()
 		if runErr == nil {
-			return nil, fmt.Errorf("WDA runner exited before becoming ready (log tail: %s)", tailString(s.RunnerLog(), 600))
+			return nil, fmt.Errorf("runner exited before becoming ready (log tail: %s)", tailString(s.RunnerLog(), 600))
 		}
-		return nil, fmt.Errorf("WDA runner failed: %w (log tail: %s)", runErr, tailString(s.RunnerLog(), 600))
+		return nil, fmt.Errorf("runner failed: %w (log tail: %s)", runErr, tailString(s.RunnerLog(), 600))
 	default:
 	}
 

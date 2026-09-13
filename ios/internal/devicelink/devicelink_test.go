@@ -66,7 +66,10 @@ func TestLinkStartStartsAndClosesOnce(t *testing.T) {
 	sess := &fakeSession{hostPort: portOf(t, srv.URL)}
 	defer withFakeStart(t, sess)()
 
-	l := New(Options{WDABundleID: "com.x.WebDriverAgentRunner.xctrunner", XCTestConfig: "WebDriverAgentRunner.xctest", ReadyTimeout: 5 * time.Second})
+	// RunnerDriver "wda": this test exercises the W3C session lifecycle
+	// (Status → CreateSession → Session id → Close deletes it), which only
+	// the WDA backend has. DeviceKit lifecycle has its own test below.
+	l := New(Options{WDABundleID: "com.x.WebDriverAgentRunner.xctrunner", XCTestConfig: "WebDriverAgentRunner.xctest", RunnerDriver: "wda", ReadyTimeout: 5 * time.Second})
 	if err := l.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -125,7 +128,7 @@ func TestLinkListAppsViaSession(t *testing.T) {
 	}
 	defer withFakeStart(t, sess)()
 
-	l := New(Options{WDABundleID: "com.x.WebDriverAgentRunner.xctrunner", XCTestConfig: "WebDriverAgentRunner.xctest"})
+	l := New(Options{WDABundleID: "com.x.WebDriverAgentRunner.xctrunner", XCTestConfig: "WebDriverAgentRunner.xctest", RunnerDriver: "wda"})
 	if err := l.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -152,7 +155,7 @@ func TestLinkDelegatesCommandsToWDA(t *testing.T) {
 	sess := &fakeSession{hostPort: portOf(t, srv.URL)}
 	defer withFakeStart(t, sess)()
 
-	l := New(Options{WDABundleID: "com.x.WebDriverAgentRunner.xctrunner", XCTestConfig: "WebDriverAgentRunner.xctest"})
+	l := New(Options{WDABundleID: "com.x.WebDriverAgentRunner.xctrunner", XCTestConfig: "WebDriverAgentRunner.xctest", RunnerDriver: "wda"})
 	if err := l.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

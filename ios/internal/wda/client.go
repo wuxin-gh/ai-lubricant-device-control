@@ -14,6 +14,7 @@ package wda
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"device-control/ios/internal/screen"
 )
@@ -81,6 +82,11 @@ type App struct {
 	BundleID string `json:"package"`
 	Name     string `json:"name"`
 }
+
+// ErrUnsupported marks wda.Client methods a runner backend cannot implement
+// (e.g. DeviceKit has no set-value RPC). The command layer maps it onto a
+// stable wire error instead of the backend approximating the operation.
+var ErrUnsupported = errors.New("operation not supported by this runner backend")
 
 // RawJSON is a convenience to make a call-response `data` from a Go value.
 func RawJSON(v any) (json.RawMessage, error) {

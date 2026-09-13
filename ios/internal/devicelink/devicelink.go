@@ -39,19 +39,26 @@ type Options struct {
 	UDID string
 	// Transport is "usb" (default) or "network".
 	Transport string
-	// WDABundleID is the WebDriverAgentRunner bundle id (signed build).
+	// RunnerBundleID is the automation runner's bundle id (signed build):
+	// DeviceKit (com.deviceboxhq.goios.devicekit.runner) or, in "wda" driver
+	// mode, the WebDriverAgent runner. Kept under the historical field name so
+	// callers (manager, wdapipeline, tests) do not churn.
 	WDABundleID string
-	// XCTestConfig is the .xctest config name inside the runner.
+	// XCTestConfig is the .xctest config name inside the runner
+	// (devicekit-iosUITests.xctest for DeviceKit, WebDriverAgentRunner.xctest
+	// for WDA).
 	XCTestConfig string
-	// WDAPort pins the host-side forwarded port. 0 (recommended) allocates a
+	// RunnerDriver selects the control backend: "" / "devicekit" (default,
+	// JSON-RPC on the forwarded 12004) or "wda" (legacy W3C WebDriver).
+	RunnerDriver string
+	// RunnerPort pins the host-side forwarded port. 0 (recommended) allocates a
 	// free port, so N iPhones on one host never collide. The device-side port
-	// is fixed by launching the runner with USE_PORT (see wda.DeviceWDAPort),
-	// which removes the old "read the port WDA printed" step entirely.
+	// is fixed by the runner (DeviceKit listens on 12004).
 	WDAPort int
-	// HTTPTimeout bounds each WDA REST call (default 30s).
+	// HTTPTimeout bounds each runner RPC/REST call (default 30s).
 	HTTPTimeout time.Duration
-	// ReadyTimeout bounds how long Start waits for WDA to answer /status after
-	// the runner is launched (default 90s: a cold XCTest runner start plus
+	// ReadyTimeout bounds how long Start waits for the runner's health
+	// endpoint after the XCTest launch (default 90s: a cold runner start plus
 	// device unlock is slow).
 	ReadyTimeout time.Duration
 }
@@ -76,10 +83,26 @@ type deviceSession interface {
 // is exercised without hardware.
 var startSession = startGoIOS
 
+// runnerClient is the backend-neutral control client a Link drives: the
+// wda.Client surface (the command handlers) plus the lifecycle bits Start and
+// Close need. Both backends (DeviceKit JSON-RPC, WDA W3C HTTP) implement it.
+type runnerClient interface {
+	wda.Client
+	// Status probes the runner's health endpoint.
+	Status(ctx context.Context) error
+	// CreateSession initializes per-run state (WDA: a WebDriver session;
+	// DeviceKit: a no-op).
+	CreateSession(ctx context.Context) error
+	// Close releases per-run state (WDA: delete session; DeviceKit: no-op).
+	Close(ctx context.Context)
+	// Session returns the backend session identifier (WDA) or empty (DeviceKit).
+	Session() string
+}
+
 // Link is a wda.Client backed by a real iPhone over go-ios.
 type Link struct {
 	opts   Options
-	client *wda.HTTPClient
+	client runnerClient
 
 	mu      sync.Mutex
 	session deviceSession
@@ -100,14 +123,14 @@ func New(opts Options) *Link {
 	return &Link{opts: opts}
 }
 
-// Start picks the device, launches WDA, forwards its port, waits for the HTTP
-// server, and creates the WebDriver session. On success the link is ready to
-// serve wda.Client calls; on any failure everything started so far is torn
-// down before returning, so a caller may retry Start on a fresh Link without
-// leaking a runner or a listening port.
+// Start picks the device, launches the runner, forwards its port, waits for
+// the health endpoint, and initializes the control session. On success the
+// link is ready to serve wda.Client calls; on any failure everything started
+// so far is torn down before returning, so a caller may retry Start on a
+// fresh Link without leaking a runner or a listening port.
 func (l *Link) Start(ctx context.Context) error {
 	if l.opts.WDABundleID == "" || l.opts.XCTestConfig == "" {
-		return fmt.Errorf("devicelink start: WDABundleID and XCTestConfig are required (see README)")
+		return fmt.Errorf("devicelink start: RunnerBundleID and XCTestConfig are required (see README)")
 	}
 	sess, err := startSession(ctx, l.opts)
 	if err != nil {
@@ -118,14 +141,14 @@ func (l *Link) Start(ctx context.Context) error {
 	l.session = sess
 	l.mu.Unlock()
 
-	client := wda.NewHTTPClient(fmt.Sprintf("http://127.0.0.1:%d", sess.HostPort()), l.opts.HTTPTimeout)
+	client := l.newRunnerClient(sess)
 	if err := waitForReady(ctx, client, l.opts.ReadyTimeout); err != nil {
 		log := sess.RunnerLog()
 		_ = l.teardown()
 		if log != "" {
-			return fmt.Errorf("devicelink start: WDA did not become ready: %w (runner log tail: %s)", err, tailString(log, 600))
+			return fmt.Errorf("devicelink start: runner did not become ready: %w (runner log tail: %s)", err, tailString(log, 600))
 		}
-		return fmt.Errorf("devicelink start: WDA did not become ready: %w", err)
+		return fmt.Errorf("devicelink start: runner did not become ready: %w", err)
 	}
 	if err := client.CreateSession(ctx); err != nil {
 		_ = l.teardown()
@@ -136,6 +159,17 @@ func (l *Link) Start(ctx context.Context) error {
 	l.client = client
 	l.mu.Unlock()
 	return nil
+}
+
+// newRunnerClient builds the control client for the selected backend. The
+// default is DeviceKit (go-ios 1.3.2's default UI backend); RunnerDriver "wda"
+// keeps the legacy WebDriverAgent path available during the transition.
+func (l *Link) newRunnerClient(sess deviceSession) runnerClient {
+	base := fmt.Sprintf("http://127.0.0.1:%d", sess.HostPort())
+	if l.opts.RunnerDriver == "wda" {
+		return wda.NewHTTPClient(base, l.opts.HTTPTimeout)
+	}
+	return NewDeviceKitClient(base, l.opts.HTTPTimeout)
 }
 
 // Close deletes the WDA session, then closes the forward and stops the runner.
@@ -169,7 +203,7 @@ func (l *Link) teardown() error {
 }
 
 // wdaClient returns the live client or an error when Start has not run.
-func (l *Link) wdaClient() (*wda.HTTPClient, error) {
+func (l *Link) wdaClient() (runnerClient, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.client == nil {
@@ -307,11 +341,11 @@ func (l *Link) LaunchApp(ctx context.Context, bundleID string) error {
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
-// waitForReady polls WDA /status until it answers or the budget expires. A
-// freshly launched XCTest runner takes seconds to bind its port, and the
-// forward accepts connections before WDA listens, so a single probe would
-// almost always fail.
-func waitForReady(ctx context.Context, c *wda.HTTPClient, budget time.Duration) error {
+// waitForReady polls the runner's health endpoint until it answers or the
+// budget expires. A freshly launched XCTest runner takes seconds to bind its
+// port, and the forward accepts connections before the runner listens, so a
+// single probe would almost always fail.
+func waitForReady(ctx context.Context, c runnerClient, budget time.Duration) error {
 	deadline := time.Now().Add(budget)
 	var last error
 	for {
