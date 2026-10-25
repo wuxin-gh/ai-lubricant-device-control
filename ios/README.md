@@ -382,14 +382,16 @@ All 16 v0 commands are implemented. iOS-specific notes:
 |---|---|
 | `get_screen_state` | WDA `/source` → compact TSV (same §8.2 format as Android); `/screenshot` → JPEG q80/≤700px/≤1.5MiB |
 | `tap`/`long_press`/`double_tap` | coordinate tap, or `node_id` resolved to bounds center (WDA has no `ACTION_CLICK`, so iOS always taps the center, unlike Android's `performAction`) |
-| `swipe`/`scroll` | WDA drag + synthesized direction swipes |
+| `swipe`/`scroll` | WDA drag + synthesized direction swipes; `scroll {node_id}` swipes through the target node's bounds center (§8: target scrollable), not the screen centre |
 | `scroll_to_node` | up to 5 scroll attempts, 300ms settle (§8.5) |
 | `type_text`/`set_text` | WDA `/type` and `/value` |
-| `press_key` | §8.6 enumeration mapped to WDA keycodes; `back` → `device_error` (iOS has no system back) |
+| `press_key` | §8.6 enumeration mapped to WDA keycodes; `back` → `unsupported` (iOS has no system back — §12, a permanent gap is not a device malfunction) |
 | `press_home` | WDA `/home` |
-| `press_recents` | app-switcher gesture (approximate) |
-| `press_back` | `device_error` — iOS has no system-wide back |
-| `open_app`/`list_apps` | `package` = iOS bundle id; go-ios `launch` + `installationproxy` |
+| `press_recents` | app-switcher gesture (approximate — see spec §8.0.4: an approximation must be declared, never reported as verified) |
+| `press_back` | `unsupported` — iOS has no system-wide back |
+| `open_app`/`list_apps` | `package` = iOS bundle id; go-ios `launch` + `installationproxy`; `open_app` verifies the bundle actually took the foreground (WDA `/wda/activeAppInfo`) and reports `device_error` when it did not; launches do NOT stop a running app |
+| `get_foreground_app` | WDA `/wda/activeAppInfo` (DeviceKit: `device.apps.foreground`); a backend that cannot observe it answers `unsupported`, never an empty package |
+| `open_url` | WDA `POST /session/{id}/url`; http/https only unless `allow_unsafe_schemes=true`; DeviceKit answers `unsupported` |
 | `dismiss_keyboard` | WDA `/dismissKeyboard` |
 
 ## Coordinates

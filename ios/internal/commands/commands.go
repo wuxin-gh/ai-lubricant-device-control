@@ -7,6 +7,8 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 
 	"device-control/ios/internal/dispatcher"
 	"device-control/ios/internal/errcode"
@@ -18,22 +20,24 @@ import (
 // client is the single integration boundary; a fake backs the tests.
 func Handlers(client wda.Client, formatter *screen.CompactTreeFormatter) map[string]handler {
 	return map[string]handler{
-		"get_screen_state": getScreenState(client, formatter),
-		"tap":              tap(client),
-		"long_press":       longPress(client),
-		"double_tap":       doubleTap(client),
-		"swipe":            swipe(client),
-		"scroll":           scroll(client),
-		"scroll_to_node":   scrollToNode(client),
-		"type_text":        typeText(client),
-		"set_text":         setText(client),
-		"press_key":        pressKey(client),
-		"dismiss_keyboard": dismissKeyboard(client),
-		"press_back":       pressBack(client),
-		"press_home":       pressHome(client),
-		"press_recents":    pressRecents(client),
-		"open_app":         openApp(client),
-		"list_apps":        listApps(client),
+		"get_screen_state":    getScreenState(client, formatter),
+		"tap":                 tap(client),
+		"long_press":          longPress(client),
+		"double_tap":          doubleTap(client),
+		"swipe":               swipe(client),
+		"scroll":              scroll(client),
+		"scroll_to_node":      scrollToNode(client),
+		"type_text":           typeText(client),
+		"set_text":            setText(client),
+		"press_key":           pressKey(client),
+		"dismiss_keyboard":    dismissKeyboard(client),
+		"press_back":          pressBack(client),
+		"press_home":          pressHome(client),
+		"press_recents":       pressRecents(client),
+		"open_app":            openApp(client),
+		"list_apps":           listApps(client),
+		"get_foreground_app":  getForegroundApp(client),
+		"open_url":            openURL(client),
 	}
 }
 
@@ -280,9 +284,35 @@ func scroll(c wda.Client) handler {
 		if !ok {
 			return nil, errcode.New(errcode.BadArgs, "missing required field: direction")
 		}
-		// node_id targeting would scroll a specific scrollable; iOS WDA's
-		// scroll gestures operate on the focused scrollable. Defer node_id
-		// scroll to a bounds-centered swipe when present.
+		// §8: `scroll {direction, node_id?}` scrolls the TARGET scrollable.
+		// Ignoring node_id (the previous behavior) swiped the screen centre and
+		// returned ok while the requested container never moved. With node_id,
+		// resolve its bounds and swipe through its centre.
+		if id, ok := argString(args, "node_id"); ok {
+			x, y, err := resolveNodeCenter(ctx, c, id)
+			if err != nil {
+				return nil, err
+			}
+			info, _, err := c.ScreenInfo(ctx)
+			if err != nil {
+				return nil, err
+			}
+			mag := info.Height / 4
+			var dx, dy int
+			switch dir {
+			case "up":
+				dy = mag
+			case "down":
+				dy = -mag
+			case "left":
+				dx = mag
+			case "right":
+				dx = -mag
+			default:
+				return nil, errcode.New(errcode.BadArgs, "unsupported direction: %s", dir)
+			}
+			return wda.EmptyData, c.Swipe(ctx, x, y, x+dx, y+dy, 300)
+		}
 		return wda.EmptyData, c.Scroll(ctx, dir)
 	}
 }
@@ -355,7 +385,7 @@ func pressKey(c wda.Client) handler {
 		}
 		switch key {
 		case "back":
-			return nil, errcode.New(errcode.DeviceError,
+			return nil, errcode.New(errcode.Unsupported,
 				"iOS has no system-wide back button")
 		case "home":
 			return wda.EmptyData, c.Home(ctx)
@@ -365,14 +395,20 @@ func pressKey(c wda.Client) handler {
 }
 
 func dismissKeyboard(c wda.Client) handler {
-	return func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
-		return wda.EmptyData, c.DismissKeyboard(context.Background())
+	return func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
+		// Propagate the dispatcher's ctx: using context.Background() detached the
+		// call from its timeout budget and from call-cancel, so a stuck WDA
+		// dismiss could outlive the server's abandonment of the request_id.
+		return wda.EmptyData, c.DismissKeyboard(ctx)
 	}
 }
 
 func pressBack(c wda.Client) handler {
 	return func(_ context.Context, _ map[string]any) (json.RawMessage, error) {
-		return nil, errcode.New(errcode.DeviceError,
+		// unsupported, not device_error: this is a permanent platform fact, and
+		// §12's unsupported is the code that tells the caller "never retry,
+		// never route here again" without looking like a device malfunction.
+		return nil, errcode.New(errcode.Unsupported,
 			"iOS has no system-wide back button")
 	}
 }
@@ -398,7 +434,75 @@ func openApp(c wda.Client) handler {
 			return nil, errcode.New(errcode.BadArgs, "missing required field: package")
 		}
 		if err := c.LaunchApp(ctx, bundle); err != nil {
-			return nil, errcode.New(errcode.NotFound, "no launchable app for bundle id: %s", bundle)
+			// Classify instead of laundering every failure into not_found: the
+			// original code reported "no launchable app for bundle id" for a
+			// timeout or a dead session, which is both wrong and non-retryable.
+			// Only a backend that can positively identify the bundle as absent
+			// earns not_found.
+			msg := err.Error()
+			lower := strings.ToLower(msg)
+			switch {
+			case strings.Contains(lower, "not found") ||
+				strings.Contains(lower, "no such") ||
+				strings.Contains(lower, "unknown bundle"):
+				return nil, errcode.New(errcode.NotFound, "no launchable app for bundle id: %s", bundle)
+			case errors.Is(err, wda.ErrUnsupported):
+				return nil, errcode.New(errcode.Unsupported, "launch is not supported by this runner backend")
+			case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+				return nil, err
+			default:
+				return nil, errcode.New(errcode.DeviceError, "launch failed for %s: %v", bundle, err)
+			}
+		}
+		// Verify the app actually came to the foreground — a 2xx that did not
+		// switch apps is a silent no-op (the bug class this driver is fixing).
+		// Best-effort: backends that cannot observe the foreground app keep the
+		// old behavior rather than inventing a failure.
+		if fg, err := c.ForegroundApp(ctx); err == nil && fg != "" && fg != bundle {
+			return nil, errcode.New(errcode.DeviceError,
+				"launch did not bring %s to the foreground (foreground is %s)", bundle, fg)
+		}
+		return wda.EmptyData, nil
+	}
+}
+
+func getForegroundApp(c wda.Client) handler {
+	return func(ctx context.Context, _ map[string]any) (json.RawMessage, error) {
+		bundle, err := c.ForegroundApp(ctx)
+		if err != nil {
+			if errors.Is(err, wda.ErrUnsupported) {
+				return nil, errcode.New(errcode.Unsupported,
+					"this runner backend cannot observe the foreground app")
+			}
+			return nil, err
+		}
+		out := map[string]any{"package": bundle}
+		return json.Marshal(out)
+	}
+}
+
+// openURL mirrors mobile-mcp's mobile_open_url: hand a URL to the default
+// handler. The url is scheme-checked the same way the reference does — http/https
+// unless the caller opts out — because an arbitrary scheme from an LLM-driven
+// agent is a real attack surface (custom schemes can trigger privileged
+// app actions).
+func openURL(c wda.Client) handler {
+	return func(ctx context.Context, args map[string]any) (json.RawMessage, error) {
+		url, ok := argString(args, "url")
+		if !ok {
+			return nil, errcode.New(errcode.BadArgs, "missing required field: url")
+		}
+		if !strings.HasPrefix(strings.ToLower(url), "http://") &&
+			!strings.HasPrefix(strings.ToLower(url), "https://") {
+			return nil, errcode.New(errcode.BadArgs,
+				"only http/https schemes are accepted: %s", url)
+		}
+		if err := c.OpenURL(ctx, url); err != nil {
+			if errors.Is(err, wda.ErrUnsupported) {
+				return nil, errcode.New(errcode.Unsupported,
+					"this runner backend cannot open urls")
+			}
+			return nil, err
 		}
 		return wda.EmptyData, nil
 	}

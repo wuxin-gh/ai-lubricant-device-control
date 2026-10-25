@@ -73,6 +73,10 @@ func (f *fakeWDA) handle(w http.ResponseWriter, r *http.Request) {
 		writeValue(w, nil)
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/wda/launchApp"):
 		writeValue(w, nil)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/url"):
+		writeValue(w, nil)
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/wda/activeAppInfo"):
+		writeValue(w, map[string]any{"bundleId": "com.apple.mobilesafari"})
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/element"):
 		writeValue(w, map[string]any{"element-6066-11e4-a52e-4f735466cecf": "el-1"})
 	case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/element/") && strings.HasSuffix(r.URL.Path, "/value"):
@@ -149,8 +153,12 @@ func TestCreateSessionReadsScaleAndScreenInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Width != 393 || info.Height != 852 {
-		t.Fatalf("screen = %dx%d, want 393x852", info.Width, info.Height)
+	// window/size is reported in WDA points (393x852); spec §1/§8.1 requires the
+	// wire's screen object to be physical pixels, so the client scales by the
+	// probed pixelRatio (3) — 1179x2556. The tree's bounds are scaled the same
+	// way, so a caller's coordinate math sees one unit system.
+	if info.Width != 1179 || info.Height != 2556 {
+		t.Fatalf("screen = %dx%d, want 1179x2556 (points × scale)", info.Width, info.Height)
 	}
 	if scale != 3 {
 		t.Fatalf("reported scale = %d, want 3", scale)

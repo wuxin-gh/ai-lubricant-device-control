@@ -45,6 +45,8 @@ func routeElement(s string) string           { return sessionRoute(s, "element")
 func routeElementValue(s, eid string) string { return sessionRoute(s, "element", eid, "value") }
 func routeActions(s string) string           { return sessionRoute(s, "actions") }
 func routeLaunchApp(s string) string         { return sessionRoute(s, "wda", "launchApp") }
+func routeActiveAppInfo(s string) string     { return sessionRoute(s, "wda", "activeAppInfo") }
+func routeURL(s string) string               { return sessionRoute(s, "url") }
 func routeDismissKeyboard(s string) string   { return sessionRoute(s, "wda", "keyboard", "dismiss") }
 func routePressButton(s string) string       { return sessionRoute(s, "wda", "pressButton") }
 func routeKeys(s string) string              { return sessionRoute(s, "keys") }
@@ -146,7 +148,11 @@ func SetValuePayload(text string) map[string]any {
 	return map[string]any{"value": []string{text}}
 }
 
-// LaunchAppPayload launches a bundle id (optionally stopping it first).
+// LaunchAppPayload launches a bundle id. stopIfRunning MUST be false for the
+// open_app command: true force-restarts an already-running app (destroying its
+// state), while the Android implementation resumes the existing task — the
+// two sides must behave the same. (The payload builder is also usable for a
+// future dedicated restart flow that wants the restart semantics.)
 func LaunchAppPayload(bundleID string, stopIfRunning bool) map[string]any {
 	return map[string]any{"bundleId": bundleID, "shouldWaitForQuiescence": true, "stopIfRunning": stopIfRunning}
 }
@@ -171,6 +177,11 @@ func NewSessionPayload() map[string]any {
 // PressHomePayload targets /session/{id}/wda/pressButton.
 func PressHomePayload() map[string]any {
 	return map[string]any{"name": "home"}
+}
+
+// URLPayload is the W3C navigation body for POST /session/{id}/url.
+func URLPayload(url string) map[string]any {
+	return map[string]any{"url": url}
 }
 
 // KeyPayload synthesizes key input as an Appium WDA /keys sequence.

@@ -5,7 +5,8 @@ package dev.devicecontrol.app.protocol
  * against this list (`hub.Supports`), so undeclared commands never reach the wire — over-declaring
  * is the bug, under-declaring is safe.
  *
- * This matches the spec §8 vocabulary and exactly the commands the app implements in
+ * This matches the spec §8 vocabulary plus the two non-privileged extensions
+ * (`get_foreground_app`, `open_url`) and exactly the commands the app implements in
  * [dev.devicecontrol.app.command.CommandDispatcher]. Keeping it as one list, not scattered
  * strings, prevents drift between what is registered and what is handled.
  */
@@ -31,6 +32,8 @@ object Capabilities {
             "press_recents",
             "open_app",
             "list_apps",
+            "get_foreground_app",
+            "open_url",
         )
 
     /**

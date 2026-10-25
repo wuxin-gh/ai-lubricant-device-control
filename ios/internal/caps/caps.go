@@ -12,9 +12,11 @@
 // undeclared-command rejection.
 package caps
 
-// All is the complete v0 command vocabulary this driver implements, in spec §8
+// All is the command vocabulary this driver implements, in spec §8
 // order. Kept as one list, not scattered strings, so registration and the
-// command dispatch table cannot drift.
+// command dispatch table cannot drift. get_foreground_app/open_url extend the
+// v0 sixteen (non-privileged additions aligned with mobile-mcp's
+// get_foreground_app / open_url).
 var All = []string{
 	"get_screen_state",
 	"tap",
@@ -32,6 +34,8 @@ var All = []string{
 	"press_recents",
 	"open_app",
 	"list_apps",
+	"get_foreground_app",
+	"open_url",
 }
 
 // ForDevice returns the capability set for this iOS device. There is no

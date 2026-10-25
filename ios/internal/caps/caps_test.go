@@ -2,12 +2,14 @@ package caps
 
 import "testing"
 
-// Ported from CapabilitiesTest.kt. v0 vocabulary is the complete 16, once.
+// Ported from CapabilitiesTest.kt. The vocabulary is the 16 v0 commands plus
+// the two non-privileged extensions (get_foreground_app, open_url), once each.
 func TestAllIsCompleteVocabulary(t *testing.T) {
 	want := []string{
 		"get_screen_state", "tap", "long_press", "double_tap", "swipe", "scroll",
 		"scroll_to_node", "type_text", "set_text", "press_key", "dismiss_keyboard",
 		"press_back", "press_home", "press_recents", "open_app", "list_apps",
+		"get_foreground_app", "open_url",
 	}
 	if len(All) != len(want) {
 		t.Fatalf("All has %d commands, want %d", len(All), len(want))

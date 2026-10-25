@@ -12,11 +12,22 @@ swipe, screenshot) and the device executes them and reports results.
 
 ## Status
 
-Pre-alpha. Protocol v0 is finalized — see [spec/protocol-v0.md](spec/protocol-v0.md).
-M1 (Android `core/` library) is done: it compiles and its 261 unit tests pass.
-M3 (Go reference server) is done. Not yet runnable end-to-end — the Android app
-shell (M2) is the next milestone. See [PLAN.md](PLAN.md) for the full plan,
-roadmap (M0–M4), and the hard constraints this project operates under.
+Pre-alpha, but end-to-end runnable. Protocol v0 is finalized — see
+[spec/protocol-v0.md](spec/protocol-v0.md) — plus two non-privileged extension
+commands (`get_foreground_app`, `open_url`; §8.8). Both device implementations
+are in place: the Android app (`android/`, accessibility service + foreground
+WebSocket) and the iOS driver (`ios/`, host node over WebDAgent/go-ios). The Go
+reference server (`server/`) builds and runs.
+
+Neither device path is verified against a live phone in this repository's CI —
+Android has unit coverage only (mocked), and the iOS driver is marked
+`REAL-DEVICE GATE` at its WDA/go-ios boundaries. Treat "works on a real device"
+as unproven until you run it on one.
+
+See [PLAN.md](PLAN.md) for the roadmap (M0–M4) and the hard constraints, and
+[spec/protocol-v0.md Appendix A](spec/protocol-v0.md#appendix-a--capability-alignment-and-honest-degradation)
+for the capability-alignment and honest-degradation table (what a non-privileged
+implementation can and cannot do relative to adb/host-driven tooling).
 
 ## Scope / what this is
 
@@ -34,11 +45,12 @@ roadmap (M0–M4), and the hard constraints this project operates under.
 
 ## Quick start
 
-Nothing runnable end-to-end yet — the device app (M2) is still ahead. The
-protocol is frozen in [spec/protocol-v0.md](spec/protocol-v0.md), the
-[Android `core/` library](android/core/) compiles and tests green, and the
-[Go reference server](server/) builds and runs. Next up is M2. See
-[PLAN.md §6](PLAN.md#6-实施里程碑).
+Run the [Go reference server](server/), pair a device (Android app or the iOS
+host node), point it at your server, and drive it. The protocol is frozen in
+[spec/protocol-v0.md](spec/protocol-v0.md); the Android `core/` library and
+[Go reference server](server/) build and test green; the Android app and iOS
+driver are complete but await real-device acceptance. See
+[PLAN.md §6](PLAN.md#6-实施里程碑) for milestone status.
 
 ## License
 

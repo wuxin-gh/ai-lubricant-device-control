@@ -74,6 +74,16 @@ type Client interface {
 
 	// LaunchApp launches the app with the given bundle ID.
 	LaunchApp(ctx context.Context, bundleID string) error
+
+	// ForegroundApp returns the bundle id of the app currently in the
+	// foreground (mobile-mcp's get_foreground_app equivalent). Backends that
+	// cannot observe this return ErrUnsupported — callers must not treat an
+	// unsupported answer as "no app is foregrounded".
+	ForegroundApp(ctx context.Context) (string, error)
+
+	// OpenURL opens a URL in the default handler (Safari/browser). Backends
+	// without a route return ErrUnsupported.
+	OpenURL(ctx context.Context, url string) error
 }
 
 // App is an installed iOS app: bundle ID (the iOS analogue of Android package)

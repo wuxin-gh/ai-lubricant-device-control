@@ -234,15 +234,16 @@ func (c *DeviceKitClient) Swipe(ctx context.Context, x1, y1, x2, y2, durationMS 
 	}, nil)
 }
 
-// Scroll synthesizes a direction swipe from the screen centre, mirroring the
-// WDA client's approach. Works in POINTS throughout (screenSnapshot is points).
+// Scroll synthesizes a direction swipe from the screen centre. screenSnapshot
+// is physical pixels now, but the DeviceKit swipe RPC takes points, so the
+// centre is scaled back.
 func (c *DeviceKitClient) Scroll(ctx context.Context, direction string) error {
 	info := c.screenSnapshot()
 	if info.Width <= 0 || info.Height <= 0 {
 		return fmt.Errorf("devicekit scroll: unknown screen size (info not probed?)")
 	}
-	mag := info.Height / 4
-	cx, cy := info.Width/2, info.Height/2
+	cx, cy := c.toPoints(info.Width/2, info.Height/2)
+	_, mag := c.toPoints(0, info.Height/4)
 	var dx, dy int
 	switch direction {
 	case "up":
@@ -300,15 +301,40 @@ func (c *DeviceKitClient) Recents(ctx context.Context) error {
 	if info.Width <= 0 || info.Height <= 0 {
 		return fmt.Errorf("devicekit recents: unknown screen size (info not probed?)")
 	}
-	cx := info.Width / 2
+	// The swipe RPC takes points; screenSnapshot is physical pixels now.
+	cx, bottomY := c.toPoints(info.Width/2, info.Height-10)
+	_, midY := c.toPoints(0, info.Height/2)
 	return c.rpc(ctx, dkSwipe, map[string]any{
-		"fromX": cx, "fromY": info.Height - 10, "toX": cx, "toY": info.Height / 2,
+		"fromX": cx, "fromY": bottomY, "toX": cx, "toY": midY,
 		"duration": 0.35,
 	}, nil)
 }
 
 func (c *DeviceKitClient) LaunchApp(ctx context.Context, bundleID string) error {
 	return c.rpc(ctx, dkAppsLaunch, map[string]any{"bundleId": bundleID}, nil)
+}
+
+// ForegroundApp reads the frontmost app from DeviceKit. The go-ios reference
+// client (cmd_ui.go) exposes device.apps.foreground; a runner without it fails
+// here and the command layer maps the error onto unsupported.
+func (c *DeviceKitClient) ForegroundApp(ctx context.Context) (string, error) {
+	var reply struct {
+		BundleID string `json:"bundleId"`
+	}
+	if err := c.rpc(ctx, "device.apps.foreground", map[string]any{}, &reply); err != nil {
+		return "", err
+	}
+	if reply.BundleID == "" {
+		return "", fmt.Errorf("devicekit apps.foreground: empty bundleId")
+	}
+	return reply.BundleID, nil
+}
+
+// OpenURL has no DeviceKit RPC in the reference runner; refuse rather than
+// approximate by launching Safari + typing (which is fragile and not a real
+// "open URL" — it would silently mistype and leave the user in a text field).
+func (c *DeviceKitClient) OpenURL(ctx context.Context, url string) error {
+	return fmt.Errorf("%w: devicekit has no open-url rpc", ErrUnsupported)
 }
 
 func (c *DeviceKitClient) Screenshot(ctx context.Context) ([]byte, error) {
@@ -394,10 +420,8 @@ func (c *DeviceKitClient) probeScreenInfo(ctx context.Context) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if info.Width > 0 {
-		c.info.Width = info.Width
-		c.info.Height = info.Height
-	}
+	// Scale first: device.info reports points, and width/height must be
+	// multiplied by the FINAL scale to reach physical pixels.
 	ratio := info.Scale
 	if ratio <= 0 {
 		ratio = info.PixelRatio
@@ -407,6 +431,12 @@ func (c *DeviceKitClient) probeScreenInfo(ctx context.Context) {
 	}
 	if c.scale <= 0 {
 		c.scale = 2
+	}
+	if info.Width > 0 {
+		// device.info reports points; the wire spec (§1, §8.1) wants physical
+		// pixels and the tree bounds are already scaled, so scale here too.
+		c.info.Width = info.Width * c.scale
+		c.info.Height = info.Height * c.scale
 	}
 	switch {
 	case c.scale == 2:

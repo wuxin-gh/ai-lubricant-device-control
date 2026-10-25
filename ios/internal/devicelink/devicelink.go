@@ -339,6 +339,24 @@ func (l *Link) LaunchApp(ctx context.Context, bundleID string) error {
 	return c.LaunchApp(ctx, bundleID)
 }
 
+// ForegroundApp returns the frontmost app's bundle id via the runner backend.
+func (l *Link) ForegroundApp(ctx context.Context) (string, error) {
+	c, err := l.wdaClient()
+	if err != nil {
+		return "", err
+	}
+	return c.ForegroundApp(ctx)
+}
+
+// OpenURL opens a URL via the runner backend.
+func (l *Link) OpenURL(ctx context.Context, url string) error {
+	c, err := l.wdaClient()
+	if err != nil {
+		return err
+	}
+	return c.OpenURL(ctx, url)
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────
 
 // waitForReady polls the runner's health endpoint until it answers or the

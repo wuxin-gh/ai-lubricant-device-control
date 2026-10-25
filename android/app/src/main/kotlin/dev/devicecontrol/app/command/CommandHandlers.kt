@@ -4,12 +4,15 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.view.KeyEvent
 import dev.devicecontrol.app.CoreGraph
 import dev.devicecontrol.core.CoreException
 import dev.devicecontrol.core.accessibility.AccessibilityNodeData
 import dev.devicecontrol.core.accessibility.BoundsData
+import dev.devicecontrol.core.accessibility.DeviceControlAccessibilityService
 import dev.devicecontrol.core.accessibility.ScrollDirection
 import dev.devicecontrol.core.screencapture.ScreenshotData
 import kotlinx.coroutines.delay
@@ -63,6 +66,8 @@ class CommandHandlers(
             "press_recents" to ::pressRecents,
             "open_app" to ::openApp,
             "list_apps" to ::listApps,
+            "get_foreground_app" to ::getForegroundApp,
+            "open_url" to ::openUrl,
         ).associate { it.first to it.second }
 
     // ── get_screen_state ──────────────────────────────────────────────────────────
@@ -187,17 +192,23 @@ class CommandHandlers(
         // Already on-screen? No-op (§8.5).
         if (node.visible) return buildJsonObject {}
 
-        val scrollable = findNearestScrollableAncestor(nodeId, initWindows)
-            ?: throw CommandException(
-                ErrorCode.STALE_NODE,
-                "node_id $nodeId has no scrollable ancestor",
-            )
-
+        var currentWindows = initWindows
         repeat(MAX_SCROLL_ATTEMPTS) { attempt ->
-            graph.actionExecutor.scrollNode(scrollable, ScrollDirection.DOWN, initWindows)
+            // Re-derive the scrollable ancestor from the CURRENT tree every attempt: node ids
+            // are derived from bounds, so a scroll shifts them and an id resolved against the
+            // pre-scroll tree can point at the wrong (or a stale) node. Also do NOT drop the
+            // Result — a genuine scroll failure (service gone, node no longer scrollable) must
+            // surface as ok=false, not silently continue into the "return ok" tail.
+            val scrollable = findNearestScrollableAncestor(nodeId, currentWindows)
+                ?: throw CommandException(
+                    ErrorCode.STALE_NODE,
+                    "node_id $nodeId has no scrollable ancestor (attempt ${attempt + 1})",
+                )
+            graph.actionExecutor.scrollNode(scrollable, ScrollDirection.DOWN, currentWindows)
+                .getOrThrow()
             delay(SETTLE_MS)
-            val refreshed = graph.screenReader.readFreshWindows()
-            val current = graph.elementFinder.findNodeById(refreshed, nodeId)
+            currentWindows = graph.screenReader.readFreshWindows()
+            val current = graph.elementFinder.findNodeById(currentWindows, nodeId)
                 ?: throw CommandException(
                     ErrorCode.STALE_NODE,
                     "node_id $nodeId vanished during scroll (attempt ${attempt + 1})",
@@ -216,7 +227,15 @@ class CommandHandlers(
         val text = args["text"]?.jsonPrimitive?.contentOrNull
             ?: throw CommandException(ErrorCode.BAD_ARGS, "missing required field: text")
         requireAccessibilityIme("type_text")
-        graph.typeInputController.commitText(text, newCursorPosition = 1)
+        // commitText's Boolean means "IC was available and the call was dispatched", not
+        // "the field accepted it" — but false (IC died between isReady() and here, a
+        // TOCTOU race) must not surface as ok=true with zero text.
+        if (!graph.typeInputController.commitText(text, newCursorPosition = 1)) {
+            throw CommandException(
+                ErrorCode.NOT_READY,
+                "input connection unavailable; focus an editable field first",
+            )
+        }
         return buildJsonObject {}
     }
 
@@ -235,6 +254,12 @@ class CommandHandlers(
     // are also accepted here for convenience. Keys that affect the focused editor
     // (enter, delete, tab, ...) route through the IME input connection so they land on
     // the current field, not anywhere arbitrary.
+    //
+    // Known gap (not fixed here): `enter` is sent as a synthetic KEYCODE_ENTER. Fields
+    // whose `imeOptions` is actionSearch/Done/Go/Send fire their editor action only via
+    // `InputConnection.performEditorAction(actionId)`, which core does not expose yet;
+    // for those this is a no-op. Surfacing it needs a core `getEditorInfo` + `perform
+    // EditorAction` pair — left for when the spec picks the press_key→enter semantics.
 
     private suspend fun pressKey(args: JsonObject): JsonElement {
         val key = args["key"]?.jsonPrimitive?.contentOrNull
@@ -248,8 +273,14 @@ class CommandHandlers(
                 requireAccessibilityIme("press_key '$key'")
                 val down = KeyEvent(KeyEvent.ACTION_DOWN, keyCode)
                 val up = KeyEvent(KeyEvent.ACTION_UP, keyCode)
-                graph.typeInputController.sendKeyEvent(down)
-                graph.typeInputController.sendKeyEvent(up)
+                // sendKeyEvent's Boolean means IC was available; false (IC died between
+                // isReady() and here) must surface, not be swallowed into ok=true.
+                if (!graph.typeInputController.sendKeyEvent(down)) {
+                    throw CommandException(ErrorCode.NOT_READY, "input connection unavailable")
+                }
+                if (!graph.typeInputController.sendKeyEvent(up)) {
+                    throw CommandException(ErrorCode.NOT_READY, "input connection unavailable")
+                }
             }
         }
         return buildJsonObject {}
@@ -278,7 +309,22 @@ class CommandHandlers(
     // ── apps ──────────────────────────────────────────────────────────────────────
     // core does NOT implement open_app or list_apps (PLAN.md step 8). Use
     // PackageManager directly; the manifest declares QUERY_ALL_PACKAGES for this.
-
+    //
+    // BAL (background activity start, Android 10+): `context` here is the foreground
+    // Service, which has no visible Activity, so a raw `startActivity` is silently
+    // dropped by the system (logged only in logcat, no exception) — the original bug
+    // where the command returned ok but the app never opened. The dispatcher now shows
+    // a TYPE_ACCESSIBILITY_OVERLAY indicator for the whole duration of the command,
+    // which makes this UID count as foreground for the BAL check (same mechanism
+    // upstream ARC-MCP relies on). That overlay is added async on the main looper, so
+    // the FIRST startActivity can still lose the attach race, and Chinese ROMs (Huawei
+    // 后台弹出界面) gate background launches behind their own switch independent of AOSP.
+    // We therefore verify the launch actually took the foreground (reading the a11y
+    // service's volatile currentPackageName, updated by TYPE_WINDOW_STATE_CHANGED),
+    // retry once (by then the overlay is attached), and if it still did not come up
+    // report an actionable error instead of a false success. When the a11y service is
+    // not connected (unit tests, or the user has not enabled it) we cannot verify, so
+    // we preserve the old best-effort ok rather than inventing a failure.
     private suspend fun openApp(args: JsonObject): JsonElement {
         val pkg = args["package"]?.jsonPrimitive?.contentOrNull
             ?: throw CommandException(ErrorCode.BAD_ARGS, "missing required field: package")
@@ -289,7 +335,35 @@ class CommandHandlers(
             )
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
+        if (!verifyForeground(pkg)) {
+            // Overlay should be attached by now; give BAL a second chance.
+            context.startActivity(intent)
+        }
+        val a11yReady = DeviceControlAccessibilityService.instance != null
+        if (a11yReady && !verifyForeground(pkg)) {
+            throw CommandException(
+                ErrorCode.DEVICE_ERROR,
+                "did not come to the foreground: $pkg — allow this app to " +
+                    "display over other apps and (on Chinese ROMs) enable " +
+                    "background pop-up / auto-start for it",
+            )
+        }
         return buildJsonObject {}
+    }
+
+    /**
+     * Polls the accessibility service's reported foreground package until it equals
+     * [pkg], for up to [OPEN_APP_FOREGROUND_TIMEOUT_MS]. Returns false on timeout or
+     * when the service is not connected (caller decides whether that is a failure).
+     */
+    private suspend fun verifyForeground(pkg: String): Boolean {
+        val service = DeviceControlAccessibilityService.instance ?: return false
+        val deadline = SystemClock.elapsedRealtime() + OPEN_APP_FOREGROUND_TIMEOUT_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (service.getCurrentPackageName() == pkg) return true
+            delay(OPEN_APP_FOREGROUND_POLL_MS)
+        }
+        return service.getCurrentPackageName() == pkg
     }
 
     private suspend fun listApps(args: JsonObject): JsonElement {
@@ -312,6 +386,86 @@ class CommandHandlers(
                 apps.forEach { add(it) }
             }
         }
+    }
+
+    // ── foreground / urls (non-privileged extensions) ─────────────────────────────
+
+    /**
+     * The app currently holding the foreground window. The data is already
+     * maintained for free by the accessibility service (`TYPE_WINDOW_STATE_CHANGED`
+     * updates a volatile field) — this command only surfaces it. Returns
+     * `not_ready` when the service is not connected, rather than reporting an
+     * empty package as if nothing were foregrounded.
+     */
+    private suspend fun getForegroundApp(@Suppress("UNUSED_PARAMETER") args: JsonObject): JsonElement {
+        val service = DeviceControlAccessibilityService.instance
+            ?: throw CommandException(ErrorCode.NOT_READY, "accessibility service not connected")
+        val pkg = service.getCurrentPackageName()
+            ?: throw CommandException(ErrorCode.NOT_READY, "foreground package not yet observed")
+        return buildJsonObject {
+            put("package", pkg)
+            service.getCurrentActivityName()?.let { put("activity", it) }
+        }
+    }
+
+    /**
+     * Opens a URL in the default handler — the non-privileged half of
+     * mobile-mcp's `mobile_open_url`. Goes through the same BAL path as
+     * `open_app` (the dispatcher's overlay indicator is what makes a background
+     * `startActivity` legal), so it inherits both the retry-once race handling
+     * and the Chinese-ROM "background pop-up" caveat.
+     *
+     * Only http/https are accepted by default, matching the reference tool's
+     * policy: `intent://`, `mailto:` and custom schemes can trigger privileged
+     * actions in other apps, which is a real attack surface for an
+     * agent-driven device. `allow_unsafe_schemes=true` opts out explicitly.
+     */
+    private suspend fun openUrl(args: JsonObject): JsonElement {
+        val url = args["url"]?.jsonPrimitive?.contentOrNull
+            ?: throw CommandException(ErrorCode.BAD_ARGS, "missing required field: url")
+        val allowUnsafe = args["allow_unsafe_schemes"]?.jsonPrimitive?.booleanOrNull ?: false
+        val scheme = url.substringBefore(":", "").lowercase()
+        if (!allowUnsafe && scheme != "http" && scheme != "https") {
+            throw CommandException(
+                ErrorCode.BAD_ARGS,
+                "only http/https schemes are accepted (pass allow_unsafe_schemes to override): $url",
+            )
+        }
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        // An implicit VIEW has no guaranteed handler; without one, startActivity
+        // throws ActivityNotFoundException — report it as not_found rather than
+        // letting it map to an anonymous device_error.
+        if (intent.resolveActivity(context.packageManager) == null) {
+            throw CommandException(ErrorCode.NOT_FOUND, "no app can handle the url: $url")
+        }
+        val target = url.substringBefore("/").substringAfter("://")
+        runCatching { context.startActivity(intent) }
+        if (!verifyForegroundHost(target)) {
+            context.startActivity(intent) // overlay attached by now; give BAL a second chance
+        }
+        return buildJsonObject {}
+    }
+
+    /**
+     * Foreground check for `open_url`: the foreground host (domain) cannot be
+     * compared against a package name, so this only confirms that the a11y
+     * service exists and the foreground changed away from our own package. When
+     * the service is unavailable it is a no-op — best-effort, like open_app's.
+     */
+    private suspend fun verifyForegroundHost(host: String): Boolean {
+        val service = DeviceControlAccessibilityService.instance ?: return true
+        val deadline = SystemClock.elapsedRealtime() + OPEN_APP_FOREGROUND_TIMEOUT_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val pkg = service.getCurrentPackageName()
+            // A browser handling the url is a different package than ours; the
+            // exact match is not knowable here, so any foreign foreground counts.
+            if (pkg != null && pkg != context.packageName) return true
+            delay(OPEN_APP_FOREGROUND_POLL_MS)
+        }
+        val pkg = service.getCurrentPackageName()
+        return pkg != null && pkg != context.packageName
     }
 
     // ── internals ─────────────────────────────────────────────────────────────────
@@ -451,6 +605,10 @@ class CommandHandlers(
     companion object {
         private const val MAX_SCROLL_ATTEMPTS = 5
         private const val SETTLE_MS = 300L
+
+        /** How long open_app waits for the target to take the foreground, and how often it polls. */
+        private const val OPEN_APP_FOREGROUND_TIMEOUT_MS = 1500L
+        private const val OPEN_APP_FOREGROUND_POLL_MS = 150L
     }
 }
 

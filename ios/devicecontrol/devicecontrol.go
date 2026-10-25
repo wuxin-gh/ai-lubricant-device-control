@@ -21,6 +21,8 @@ import (
 	"math/rand"
 	"time"
 
+	ios "github.com/danielpaulus/go-ios/ios"
+
 	"device-control/ios/internal/commands"
 	"device-control/ios/internal/creds"
 	"device-control/ios/internal/devicelink"
@@ -112,6 +114,17 @@ func LoadCredential(path string) (Credential, bool, error) {
 // preparation job to verify a freshly installed runner actually answers before
 // the device is reported ready.
 type Link = devicelink.Link
+
+// LanDeviceEntry fabricates the go-ios device entry for a phone that usbmuxd
+// cannot see — the unplugged, LAN-only case. A host that talks to the device
+// outside a link (installing, listing apps) needs the same entry the driver
+// uses internally, and must not reimplement the tunnel-info stamping.
+//
+// Returns an error when no RSD tunnel is up for that UDID (the node's LAN
+// tunnel agent creates it; a plugged phone does not need this at all).
+func LanDeviceEntry(udid string) (ios.DeviceEntry, error) {
+	return devicelink.LanDeviceEntry(udid)
+}
 
 // NewLink builds an unstarted Link. Call Start to launch WDA and Close to tear
 // the runner and port forward down. RunDevice does this internally for the

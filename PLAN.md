@@ -107,16 +107,23 @@ device-control/
 - **M2 — Android app**：✅ 已完成，见 `android/app/`。ForegroundService（specialUse）持 OkHttp WS 长连接，
   实现 register/heartbeat/full-jitter 重连（§7）/close-code 分类（4003 擦凭据、4004 停、其余退避）；
   `CommandDispatcher` 处理 request_id 去重 + in-flight ≤8 + timeout 预算 + 异常→错误码映射；
-  16 个命令 handler（get_screen_state 走新增的 core `ScreenReader`；node_id 优先 a11y 动作；
-  scroll_to_node 组合 5 次/300ms；press_key 映射 §8.6 枚举；open_app/list_apps 走 PackageManager）。
+  18 个命令 handler（get_screen_state 走新增的 core `ScreenReader`；node_id 优先 a11y 动作；
+  scroll_to_node 组合 5 次/300ms；press_key 映射 §8.6 枚举；open_app/list_apps 走 PackageManager；
+  get_foreground_app 读无障碍窗口状态；open_url 走 ACTION_VIEW + 默认只放 http/https）。
   最小 UI：无障碍状态 + 空（默认）地址框 + 配对码 + 连接/断开/解除配对。`allowBackup=false`、
   凭据 app 私有文件 0600。core + app 共 334 测试全绿，`:app:assembleDebug` 产出 14MB APK。
+  **2026-10 修谎**（详见 spec §8.0 诚实性契约）：overlay 指示器接进 dispatcher 修 BAL 静默失败、
+  scrollToNode 补 Result 检查 + 用刷新树、typeText/pressKey 不再丢 IC 布尔。
   **真机端到端验证仍待做**（本机是 VM，跑不了模拟器）：服务端起 → 配对 → `get_screen_state`
   拿 TSV → `tap` 真机响应 → `DELETE` 触发 4003 擦凭据。
 - **M3 — 参考服务端**：✅ 已完成，见 `server/`（Go，单二进制自部署）。配对/注册/下发/收结果
   全通，11 个端到端测试覆盖握手、能力门禁、结构化错误、重连挤占、吊销即时断连。
   详见 `server/README.md`。注意：默认只听 127.0.0.1 且不做 TLS，对外暴露需自备反代。
-- **M4 — 打磨**：能力协商、端上脱敏接线、审计日志、异常熔断（只能控自己 onboard 的设备）。
+- **M4 — 打磨**：能力动态协商（capabilities-changed 随 IME/后端状态重发）、端上脱敏接线、
+  审计日志、异常熔断（只能控自己 onboard 的设备）。**新增：iOS 侧剩余准确性问题**
+  （`screen.orientation` 在 WDA 路径硬编码 portrait、session 内不刷新几何；游标分页
+  实现；见 spec Appendix A.1），以及 spec Appendix A 记录的诚实降级项（terminate/logs/crashes
+  在 Android 上永久 `unsupported`，iOS 侧可后续补）。
 - **后续档位（不在 v0）**：iOS 只读查看（ReplayKit 推屏）；设备农场驱动（照 mobile-mcp 用 adb+go-ios/WDA）。
 
 ## 7. 已排除的方案（不要回头再议）

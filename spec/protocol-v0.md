@@ -185,11 +185,55 @@ Input commands are **not** idempotent — a replayed `tap` taps twice. Therefore
   abandons any running calls without sending responses; the server abandons all
   outstanding `request_id`s. Recovery is a fresh `get_screen_state` (§6).
 
-## 8. Command vocabulary (v0 minimal closed loop)
+## 8. Command vocabulary
 
 The server MUST NOT send a `cmd` absent from the device's declared
 `capabilities`; if it does, the device replies `error.code = "unsupported"`.
 All coordinates are integer physical pixels in current orientation (§1).
+
+The table is the 16-command v0 closed loop plus the two non-privileged
+extensions of §8.8. **Both sides and the server must move together**: the
+vocabulary is duplicated in `android/.../protocol/Capabilities.kt`
+(`Capabilities.ALL`), `ios/internal/caps/caps.go` (`All`), the Python server's
+`mcp_builtin/device_control/protocol.py` (`COMMANDS`), and the web console's
+`user-frontend/src/api/builtinToolsClient.ts` (`DEVICE_COMMANDS`). Adding a
+command means touching all five plus this table — a partial change surfaces as
+either an undeclared command the server refuses to route, or a routed command
+the device answers `unsupported`.
+
+### 8.0 Honesty contract (normative)
+
+A device MUST NOT reply `ok=true` unless the action actually took effect or is
+genuinely fire-and-forget with no observable completion. This rule exists
+because every one of these is a real bug found in this codebase's implementations,
+each invisible to mocked tests (`startActivity` does not throw when the OS drops
+it; a WDA route returns HTTP 200 with an error in the body; a `Result`/`Boolean`
+return value that the caller ignores reads as success):
+
+1. **Verify what is observable.** For `open_app`/`open_url`, the device MUST
+   confirm the target reached the foreground when it can observe the foreground
+   (`get_foreground_app`'s source), and reply `device_error` when it cannot. When
+   the backend genuinely cannot observe the result, best-effort `ok` is permitted
+   but the command MUST NOT be advertised as verified.
+2. **Consume the return value.** Accessibility `performAction`, gesture dispatch,
+   `InputConnection.commitText`/`sendKeyEvent`, and WDA/go-ios calls all return a
+   failure signal; a handler that discards it is non-conforming. (`commitText`'s
+   Boolean means "the input connection was there", never "the field accepted the
+   text" — say so in the error, do not upgrade it to success.)
+3. **Do not launder error classes.** A capability the platform cannot provide is
+   `unsupported` (terminal), a stale id is `stale_node`, a genuinely absent target
+   is `not_found`; mapping all three onto `device_error` (or onto `not_found`)
+   hides whether a retry could help. The `message` for a non-`device_error` code
+   MUST survive to the wire — scrubbing it destroys the actionable reason.
+4. **Approximations must be declared.** A synthesized gesture standing in for a
+   real system action (e.g. an app-switcher swipe where the platform has no such
+   API) MUST be documented in the implementation and MUST NOT be reported as a
+   verified success; if it cannot be made reliable, prefer not declaring it.
+5. **Capabilities are runtime state, not a constant.** A command's availability can
+   depend on the connected backend, OS level, and live service state (e.g. the
+   accessibility IME being bound). Devices SHOULD emit
+   `capabilities-changed` (§9) when availability changes rather than continuing to
+   advertise a command that now only fails.
 
 | cmd | args | data (on ok) | notes |
 |---|---|---|---|
@@ -209,6 +253,8 @@ All coordinates are integer physical pixels in current orientation (§1).
 | `press_recents` | `{}` | `{}` | |
 | `open_app` | `{ package }` | `{}` | |
 | `list_apps` | `{ include_system?: bool }` | `{ apps: [{ package, name }] }` | default excludes system apps |
+| `get_foreground_app` | `{}` | `{ package, activity? }` | non-privileged extension; reads the foreground window state |
+| `open_url` | `{ url, allow_unsafe_schemes?: bool }` | `{}` | non-privileged extension; default accepts only http/https |
 
 `press_back`/`press_home`/`press_recents` are distinct commands (not `press_key`
 values) so they can be capability-gated independently on read-only platforms.
@@ -392,6 +438,26 @@ more pages remain. The cursor format is `<snapshot_id>.<page>` where
 `max_nodes` truncation or cursor pagination to be implemented — but a device
 MUST implement one of them so callers never receive an unbounded tree.
 
+### 8.8 Non-privileged extensions
+
+Two commands extend the 16-command v0 closed loop. They are **non-privileged** —
+implementable by a normal sideloaded app (Android, via the accessibility service)
+and a host driver over WDA (iOS) — and they close real gaps against the
+mobile-next/mobile-mcp reference vocabulary without importing adb/shell/root
+powers. A device that cannot honor one of them honestly MUST NOT declare it (§8
+over-declaration rule); see Appendix A.
+
+| cmd | args | data (on ok) | notes |
+|---|---|---|---|
+| `get_foreground_app` | `{}` | `{ package, activity? }` | The app currently holding the foreground window. Android reads the volatile `currentPackageName` maintained by `TYPE_WINDOW_STATE_CHANGED`; iOS reads WDA `/wda/activeAppInfo` (or DeviceKit `device.apps.foreground`). **`package` must never be empty in an ok response** — a backend that cannot observe the foreground returns `not_ready` or `unsupported`, not `{package:""}`, so an empty value can never masquerade as "no app is foregrounded". `activity` is the foreground activity/class when the backend exposes it (Android yes, iOS best-effort). |
+| `open_url` | `{ url, allow_unsafe_schemes?: bool }` | `{}` | Opens `url` in the device's default handler. **Scheme policy: only `http`/`https` unless `allow_unsafe_schemes=true`** — custom schemes (`intent://`, `mailto:`, app-specific schemes) can trigger privileged actions in other apps, so the gate sits in front of the backend call, mirroring the reference tool's default-deny. No registered handler → `not_found` (the target does not exist), not `device_error`. |
+
+`get_foreground_app` is added to the **read-only** set (§5): it touches no UI
+state, so it may run concurrently with other calls rather than taking the
+device's serial mutation lock. `open_url` is a **mutating** command — it brings
+another app forward — and MUST take that lock and obey the same background-start
+(BAL) constraints as `open_app` (§8 `open_app` note, Appendix A).
+
 ## 9. Events (device → server)
 
 v0 keeps `event` **minimal** but not empty: unsolicited push is limited to two
@@ -503,4 +569,78 @@ Additional decisions made while finalizing: 4 MiB frame cap + `permessage-deflat
 inputs → no cross-reconnect retry (§6); full-jitter backoff, discard in-flight on
 reconnect (§7); `node_id` targets the latest tree with `stale_node` on miss
 (§8.4); application close-code range (§13).
+
+## Appendix A — Capability alignment and honest degradation
+
+The project's reference point for feature coverage is mobile-next/mobile-mcp.
+Its advantage is that its robot runs with **host privileges** — `adb shell`
+(Android) or a host-side go-ios driver (iOS). Ours runs as a **non-privileged
+on-device app** (Android) and a **host node over WDA/go-ios USB** (iOS), which
+is a deliberate deployment trade (PLAN.md §1: no always-on host, no adb, no
+root) and it costs real capability. This appendix records the gap honestly so
+nobody re-derives it, and so nobody implements a command that would silently lie.
+
+Legend: ✅ implemented · 🟡 possible with a user gesture per use ·
+❌ not reachable for a non-privileged implementation.
+
+| mobile-mcp tool | Android (app + a11y) | iOS (WDA + go-ios) | v0 status |
+|---|---|---|---|
+| `mobile_list_apps` | ✅ `queryIntentActivities` | ✅ `installationproxy.Browse*` | ✅ `list_apps` (§8) |
+| `mobile_launch_app` | ✅ BAL-waived via §10 overlay | ✅ `/wda/launchApp` | ✅ `open_app` (§8) |
+| `mobile_get_foreground_app` | ✅ a11y window state | ✅ `/wda/activeAppInfo` | ✅ `get_foreground_app` (§8.8) |
+| `mobile_open_url` | ✅ `ACTION_VIEW` | ✅ `POST /session/{id}/url` | ✅ `open_url` (§8.8) |
+| `mobile_click_on_screen_at_coordinates` | ✅ gesture / a11y click | ✅ W3C actions | ✅ `tap` (§8) |
+| `mobile_double_tap_on_screen` | ✅ | ✅ | ✅ `double_tap` (§8) |
+| `mobile_long_press_on_screen_at_coordinates` | ✅ | ✅ | ✅ `long_press` (§8) |
+| `mobile_swipe_on_screen` | ✅ | ✅ | ✅ `swipe` (§8) |
+| `mobile_list_elements_on_screen` | ✅ (richer: flags, hierarchy, offscreen) | ✅ WDA `/source` | ✅ `get_screen_state` (§8) |
+| `mobile_type_keys` | ✅ accessibility IME (API 33+) | ✅ `/wda/keys` | ✅ `type_text` (§8) |
+| `mobile_press_button` (HOME/BACK/ENTER/DPAD) | ✅ a11y global actions / IME keys | 🟡 HOME/ENTER/DPAD only | 🟡 `press_key`+`press_home/back/recents` (§8); iOS `press_back` is `unsupported` (§9 gap, honest) |
+| `mobile_press_button` (VOLUME/POWER/LOCK) | ❌ no key-injection permission | ❌ no WDA route | ❌ deliberately excluded from §8.6 |
+| `mobile_get_screen_size` / `mobile_get_orientation` | ✅ | ✅ (portrait hardcoded on the WDA path — see Appendix A.1) | ✅ `get_screen_state.screen` (§8) |
+| `mobile_set_orientation` | ❌ needs `WRITE_SETTINGS` | 🟡 WDA `POST /orientation` / DeviceKit `device.io.orientation.set` | ❌ not in v0; iOS could add later |
+| `mobile_install_app` | 🟡 `REQUEST_INSTALL_PACKAGES` + installer confirm dialog | 🟡 host-side `zipconduit` over USB (signed IPA) | ❌ not in v0 |
+| `mobile_uninstall_app` | 🟡 `ACTION_DELETE` confirm dialog | 🟡 `installationproxy.Uninstall` | ❌ not in v0 |
+| `mobile_terminate_app` | ❌ no `KILL_BACKGROUND_PROCESSES` real effect | 🟡 `/wda/apps/terminate` / `appservice.KillProcess` | ❌ not in v0 |
+| `mobile_set_location` | ❌ mock-location appop needs manual dev-options setup | 🟡 `simlocation.SetLocation` (USB lockdown) | ❌ not in v0 |
+| `mobile_clipboard` | 🟡 write only; read is blocked (Android 10+, a11y IME is not the default IME) | 🟡 `pasteboard` (iOS 17+ needs RSD tunnel) | ❌ not in v0 |
+| `mobile_start/stop_screen_recording` | 🟡 `MediaProjection` consent **per session** | 🟡 MJPEG/H.264 stream, no record-to-file | ❌ not in v0 |
+| `mobile_get_device_logs` | ❌ `READ_LOGS` is signature-level | ✅ `syslog` via go-ios (host-side, USB) | ❌ not in v0 (iOS only, needs a streaming primitive — see A.2) |
+| `mobile_list_crashes` / `mobile_get_crash` | ❌ tombstones/ANR need root | ✅ `crashreport.ListReports`/`DownloadReports` | ❌ not in v0 (iOS only; 4 MiB frame cap → file reference) |
+| `mobile_fold_device` | ❌ emulator-only | ❌ emulator-only | ❌ not implemented |
+| `mobile_list_available_devices` | server-side registry | server-side registry + host enumeration | server-side (not a device command) |
+
+**Capabilities deliberately NOT implemented**, with the reason a naive port
+would have lied:
+
+- `mobile_terminate_app` on Android — `killBackgroundProcesses` needs a
+  permission we do not hold and would not kill a foreground process anyway; the
+  "swipe it away in recents" fallback is fragile and ROM/locale-dependent. The
+  honest answer is `unsupported`, not a gesture that reports success.
+- `mobile_get_device_logs` / crashes on Android — `READ_LOGS` is
+  `signature|privileged`; a sideloaded app sees only its own process. `unsupported`.
+- `mobile_fold_device` — hinge control exists only as emulator/simulator APIs.
+- `mobile_set_orientation`, `mobile_set_location`, `mobile_clipboard` (read) on
+  Android — each requires either a special-access setting the user must grant in
+  Settings (`WRITE_SETTINGS`, mock-location developer option) or is blocked by the
+  Android 10+ background clipboard rule. Per §8.0 a device that cannot honor these
+  must not declare them.
+
+### A.1 Known iOS accuracy gaps (not silent, but wrong)
+
+- `get_screen_state.screen.orientation` is hardcoded `"portrait"` on the WDA
+  backend (`wda/client_http.go` `readScreenInfo`); DeviceKit reports the real
+  value. Rotation on a WDA-served device therefore reports a stale orientation
+  while the tree itself stays correct.
+- `readScreenInfo` probes once per session; the cached size/scale is not
+  refreshed on rotation, so `scroll`/`press_recents` on the WDA path use the
+  original geometry until the connection is re-established.
+
+### A.2 Streaming commands need a different shape
+
+`call`/`call-response` is one-request-one-response. A syslog stream does not fit
+it, so if logs are added for iOS-host the design is a cursor ring buffer:
+`start_syslog` → handle, `get_syslog{since}` per poll, `stop_syslog`. Anything
+larger than the 4 MiB frame cap (§2) — crash reports, log dumps — is returned as
+a host-side file reference rather than inline.
 

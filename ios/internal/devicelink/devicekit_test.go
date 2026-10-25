@@ -329,8 +329,8 @@ func TestDeviceKitScreenInfoDefaultsAndOrientation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScreenInfo: %v", err)
 	}
-	if scale != 3 || info.Width != 390 || info.Height != 844 {
-		t.Fatalf("info: %+v scale=%d", info, scale)
+	if scale != 3 || info.Width != 1170 || info.Height != 2532 {
+		t.Fatalf("info: %+v scale=%d (want points 390x844 × scale 3 = 1170x2532)", info, scale)
 	}
 	if info.DensityDpi != 480 {
 		t.Fatalf("3x density: %d", info.DensityDpi)

@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"device-control/ios/internal/wda"
 )
 
 // The closed set (spec §12).
@@ -106,6 +108,12 @@ func From(err error) string {
 		return NotReady
 	case errors.Is(err, ErrCancelled):
 		return Cancelled
+	case errors.Is(err, wda.ErrUnsupported):
+		// A backend that cannot implement a method at all (DeviceKit has no
+		// set-value RPC) must surface as unsupported, never the catch-all
+		// device_error — otherwise the caller cannot tell "this device cannot
+		// do it" from "it broke", and the dispatcher scrubs the message anyway.
+		return Unsupported
 	case errors.Is(err, context.DeadlineExceeded):
 		return Timeout
 	case errors.Is(err, context.Canceled):

@@ -2,6 +2,8 @@ package wda
 
 import (
 	"encoding/xml"
+	"fmt"
+	"hash/fnv"
 	"io"
 	"strconv"
 	"strings"
@@ -36,7 +38,7 @@ func ParseSource(xmlData []byte, scale int) (*screen.MultiWindowResult, error) {
 	if top == nil {
 		return &screen.MultiWindowResult{Windows: nil, Degraded: true}, nil
 	}
-	root := convertElement(*top, scale)
+	root := convertElement(*top, scale, 0, 0, "root")
 	return &screen.MultiWindowResult{
 		Windows:  []*screen.WindowData{{WindowID: 0, WindowType: "APPLICATION", Tree: root, Focused: true}},
 		Degraded: false,
@@ -83,7 +85,14 @@ func decodeTree(data []byte) (*wdaElement, error) {
 // explicitly: WDA rects are in points, the wire wants physical pixels, and each
 // device has its own scale (2×/3×) — a package-level default would silently mix
 // devices up (and made concurrent ParseSource calls clobber each other).
-func convertElement(e wdaElement, scale int) *screen.Node {
+//
+// node_id derivation (§8.2): the sibling index, kept-depth, and parent's id
+// feed a hash exactly like Android's AccessibilityTreeParser.generateNodeId
+// (resourceId|className|bounds|depth|index|parentId → "node_" + hex). Stable
+// across re-parses while the UI is unchanged, so callers can correlate nodes
+// across snapshots and target them (§8.4). Without this the tree's node_id
+// column was empty and EVERY node_id-targeted command returned stale_node.
+func convertElement(e wdaElement, scale, index, depth int, parentID string) *screen.Node {
 	attrs := map[string]string{}
 	for _, a := range e.Attrs {
 		attrs[strings.ToLower(a.Name.Local)] = a.Value
@@ -102,10 +111,29 @@ func convertElement(e wdaElement, scale int) *screen.Node {
 	inferFlags(n)
 	// Bounds: rect (x,y,w,h) in points → pixels.
 	n.Bounds = rectToPixelBounds(attrs, scale)
-	for _, c := range e.Children {
-		n.Children = append(n.Children, convertElement(c, scale))
+	n.ID = GenerateNodeID(n, index, depth, parentID)
+	for i, c := range e.Children {
+		n.Children = append(n.Children, convertElement(c, scale, i, depth+1, n.ID))
 	}
 	return n
+}
+
+// GenerateNodeID mirrors Android's generateNodeId: a hash over
+// resourceId|className|bounds|depth|index|parentId, hex-encoded with the
+// "node_" prefix (spec §8.2 recommends this scheme). FNV-1a 32-bit is the Go
+// stand-in for Kotlin's String.hashCode() — both are stable within one build,
+// which is all the spec requires (ids are opaque and per-snapshot correlated).
+//
+// Exported so the DeviceKit tree adapter derives ids with the SAME scheme: two
+// backends emitting different id shapes would break node_id stability for a
+// caller that re-reads across a backend switch.
+func GenerateNodeID(n *screen.Node, index, depth int, parentID string) string {
+	b := n.Bounds
+	hashInput := fmt.Sprintf("%s|%s|%d,%d,%d,%d|%d|%d|%s",
+		n.ResourceID, n.ClassName, b.Left, b.Top, b.Right, b.Bottom, depth, index, parentID)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(hashInput))
+	return "node_" + strconv.FormatUint(uint64(h.Sum32()), 16)
 }
 
 func rectToPixelBounds(attrs map[string]string, s int) screen.Bounds {

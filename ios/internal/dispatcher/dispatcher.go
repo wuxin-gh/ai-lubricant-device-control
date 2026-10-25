@@ -133,7 +133,11 @@ func mapError(requestID string, err error, cctx context.Context) wire.CallRespon
 	code := errcode.From(err)
 	msg := err.Error()
 	// For the catch-all device_error, don't leak exception internals; give the
-	// server something actionable without stack details.
+	// server something actionable without stack details. Every OTHER code keeps
+	// its message: unsupported/stale_node/not_found carry the actionable reason
+	// (which backend cannot do what, which id is stale), and scrubbing them
+	// turned "DeviceKit has no set-value rpc" into an anonymous "command
+	// failed on device" — useless to the caller.
 	if code == errcode.DeviceError {
 		msg = "command failed on device"
 	}

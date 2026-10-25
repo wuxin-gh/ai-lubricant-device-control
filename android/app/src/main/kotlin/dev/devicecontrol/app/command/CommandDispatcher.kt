@@ -4,6 +4,7 @@ import android.util.Log
 import dev.devicecontrol.app.protocol.CallFrame
 import dev.devicecontrol.app.protocol.CallResponseFrame
 import dev.devicecontrol.app.protocol.WireError
+import dev.devicecontrol.core.CommandIndicator
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
@@ -25,9 +26,18 @@ import kotlinx.coroutines.withTimeout
  *
  * One instance per connection: [seenRequestIds] and [inFlight] are per-connection
  * state (§4.2), recreated on every reconnect via [resetForNewConnection].
+ *
+ * The [indicator] wraps every dispatch exactly the way upstream ARC-MCP wraps every
+ * tool call (`LoggedToolRegistrar` → `onToolCallStarted/Finished`): it shows the
+ * device user that something is driving their phone (privacy obligation), and for
+ * `open_app` it is also **load-bearing** — the visible `TYPE_ACCESSIBILITY_OVERLAY`
+ * window makes this UID count as foreground for the background-activity-start check
+ * (`BAL_ALLOW_VISIBLE_WINDOW`), without which `startActivity` from this background
+ * service is silently dropped. `CommandIndicator.NONE` (tests) keeps the old behavior.
  */
 class CommandDispatcher(
     private val handlers: Map<String, suspend (kotlinx.serialization.json.JsonObject) -> kotlinx.serialization.json.JsonElement>,
+    private val indicator: CommandIndicator = CommandIndicator.NONE,
 ) {
     private val seenRequestIds = HashSet<String>()
     private var inFlight = 0
@@ -73,6 +83,9 @@ class CommandDispatcher(
                 errorResponse(call.requestId, ErrorCode.UNSUPPORTED, "unknown command: ${call.cmd}")
             } else {
                 val budgetMs = call.timeoutMs.coerceIn(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS).toLong()
+                // Show the overlay BEFORE the handler runs: for open_app the window must
+                // already be visible when startActivity is called (see class doc).
+                indicator.onCommandStarted(call.cmd)
                 try {
                     val data = withTimeout(budgetMs) { handler(call.args) }
                     CallResponseFrame(
@@ -89,6 +102,8 @@ class CommandDispatcher(
                 } catch (t: Throwable) {
                     Log.e(TAG, "Command '${call.cmd}' failed", t)
                     mapException(t, call.requestId)
+                } finally {
+                    indicator.onCommandFinished(call.cmd)
                 }
             }
         } finally {

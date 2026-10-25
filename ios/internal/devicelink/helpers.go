@@ -55,7 +55,7 @@ func parseDeviceKitJSONSource(raw []byte, scale int) (*screen.MultiWindowResult,
 		return nil, fmt.Errorf("devicekit dump: unexpected json shape %T", v)
 	}
 
-	nodes := adaptDKNodes(root, scale)
+	nodes := adaptDKNodes(root, scale, 0, 0, "root")
 	if len(nodes) == 0 {
 		// An empty tree is a valid (if degraded) result: some screens expose
 		// nothing. Mirror ParseSource's degraded shape.
@@ -81,18 +81,20 @@ func jsonKeys(m map[string]any) []string {
 }
 
 // adaptDKNodes converts a JSON element (object or array) into screen nodes.
-func adaptDKNodes(v any, scale int) []*screen.Node {
+// index/depth/parentID thread the §8.2 node_id derivation (same scheme as the
+// WDA parser's) so both backends emit stable, correlated ids.
+func adaptDKNodes(v any, scale, index, depth int, parentID string) []*screen.Node {
 	switch t := v.(type) {
 	case []any:
 		out := make([]*screen.Node, 0, len(t))
-		for _, item := range t {
-			if node := adaptDKOne(item, scale); node != nil {
+		for i, item := range t {
+			if node := adaptDKOne(item, scale, i, depth, parentID); node != nil {
 				out = append(out, node)
 			}
 		}
 		return out
 	case map[string]any:
-		if node := adaptDKOne(t, scale); node != nil {
+		if node := adaptDKOne(t, scale, index, depth, parentID); node != nil {
 			return []*screen.Node{node}
 		}
 	}
@@ -102,7 +104,7 @@ func adaptDKNodes(v any, scale int) []*screen.Node {
 // adaptDKOne converts one JSON element object into a screen.Node (children
 // recurse). Returns nil for non-object entries so malformed siblings are
 // skipped, not fatal.
-func adaptDKOne(v any, scale int) *screen.Node {
+func adaptDKOne(v any, scale, index, depth int, parentID string) *screen.Node {
 	obj, ok := v.(map[string]any)
 	if !ok {
 		return nil
@@ -130,10 +132,12 @@ func adaptDKOne(v any, scale int) *screen.Node {
 	node.Editable = dkBool(obj, "editable", "isEditable")
 	node.Scrollable = dkBool(obj, "scrollable", "isScrollable")
 
+	node.ID = wda.GenerateNodeID(node, index, depth, parentID)
+
 	for _, key := range []string{"children", "elements", "nodes", "subviews", "childElements"} {
 		if kids, ok := obj[key].([]any); ok && len(kids) > 0 {
-			for _, kid := range kids {
-				if child := adaptDKOne(kid, scale); child != nil {
+			for i, kid := range kids {
+				if child := adaptDKOne(kid, scale, i, depth+1, node.ID); child != nil {
 					node.Children = append(node.Children, child)
 				}
 			}

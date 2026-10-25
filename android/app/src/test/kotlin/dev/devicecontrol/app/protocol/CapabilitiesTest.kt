@@ -32,11 +32,14 @@ class CapabilitiesTest {
     }
 
     @Test
-    fun `ALL contains the complete v0 command vocabulary exactly once`() {
+    fun `ALL contains the complete vocabulary exactly once`() {
+        // 16 v0 commands + the two non-privileged extensions (get_foreground_app,
+        // open_url) — kept in lockstep with ios/internal/caps/caps_test.go.
         val expected = setOf(
             "get_screen_state", "tap", "long_press", "double_tap", "swipe", "scroll",
             "scroll_to_node", "type_text", "set_text", "press_key", "dismiss_keyboard",
             "press_back", "press_home", "press_recents", "open_app", "list_apps",
+            "get_foreground_app", "open_url",
         )
         assertEquals(expected, Capabilities.ALL.toSet())
         assertEquals(expected.size, Capabilities.ALL.size)

@@ -161,13 +161,15 @@ func TestLinkDelegatesCommandsToWDA(t *testing.T) {
 	}
 	defer l.Close()
 
-	// ScreenInfo comes from the session (scale 2 stub).
+	// ScreenInfo comes from the session (scale 2 stub). WDA reports window/size
+	// in points (390 wide); the wire wants physical pixels, so the client
+	// multiplies by scale — 780.
 	info, scale, err := l.ScreenInfo(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scale != 2 || info.Width != 390 {
-		t.Fatalf("screen = %dx%d @%dx, want 390 wide @2x", info.Width, info.Height, scale)
+	if scale != 2 || info.Width != 780 {
+		t.Fatalf("screen = %dx%d @%dx, want 780 wide @2x (points × scale)", info.Width, info.Height, scale)
 	}
 
 	// A real command round-trips through the session HTTP client.

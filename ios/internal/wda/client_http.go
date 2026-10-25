@@ -107,14 +107,9 @@ func (c *HTTPClient) Session() string {
 // /session/{id}/wda/screen {statusBarSize, pixelRatio}; a fork without it
 // falls back to the scale default.
 func (c *HTTPClient) readScreenInfo(ctx context.Context) {
-	var size struct {
-		Width  int `json:"width"`
-		Height int `json:"height"`
-	}
-	if _, err := c.do(ctx, http.MethodGet, routeWindowSize(c.session), nil, &size); err == nil && size.Width > 0 {
-		c.info.Width = size.Width
-		c.info.Height = size.Height
-	}
+	// Probe pixelRatio FIRST: window/size comes back in points and must be
+	// multiplied by scale to reach physical pixels, so scale has to be known
+	// before the multiply.
 	var scr struct {
 		PixelRatio float64 `json:"pixelRatio"`
 	}
@@ -123,6 +118,19 @@ func (c *HTTPClient) readScreenInfo(ctx context.Context) {
 	}
 	if c.scale <= 0 {
 		c.scale = 2
+	}
+	var size struct {
+		Width  int `json:"width"`
+		Height int `json:"height"`
+	}
+	if _, err := c.do(ctx, http.MethodGet, routeWindowSize(c.session), nil, &size); err == nil && size.Width > 0 {
+		// WDA reports the window size in points; the wire spec (§1, §8.1) wants
+		// integer physical pixels. The tree bounds are already scaled (source.go
+		// rectToPixelBounds), so screen must be too — a points-sized header next
+		// to pixel-sized bounds made every coordinate the caller derives from
+		// screen.w/h land in the wrong quadrant.
+		c.info.Width = size.Width * c.scale
+		c.info.Height = size.Height * c.scale
 	}
 	switch {
 	case c.scale == 2:
@@ -211,10 +219,9 @@ func (c *HTTPClient) Swipe(ctx context.Context, x1, y1, x2, y2, durationMS int) 
 	})
 }
 
-// Scroll synthesizes a direction swipe from the screen centre. It works in
-// POINTS throughout (screenSnapshot is points, the payload wants points) and
-// therefore posts the action itself instead of going through Swipe, which
-// expects physical pixels and would scale the values a second time.
+// Scroll synthesizes a direction swipe from the screen centre. screenSnapshot
+// is now in physical PIXELS (§1), but SwipePayload wants WDA POINTS, so the
+// centre is scaled back through toPoints before posting.
 func (c *HTTPClient) Scroll(ctx context.Context, direction string) error {
 	info := c.screenSnapshot()
 	if info.Width <= 0 || info.Height <= 0 {
@@ -222,8 +229,8 @@ func (c *HTTPClient) Scroll(ctx context.Context, direction string) error {
 	}
 	// Swiping the content up reveals what is below, so "down" moves the finger
 	// up. Quarter-screen reach, matching the Android driver's feel.
-	mag := info.Height / 4
-	cx, cy := info.Width/2, info.Height/2
+	cx, cy := c.toPoints(info.Width/2, info.Height/2)
+	_, mag := c.toPoints(0, info.Height/4)
 	var dx, dy int
 	switch direction {
 	case "up":
@@ -300,8 +307,10 @@ func (c *HTTPClient) Recents(ctx context.Context) error {
 	if info.Width <= 0 {
 		return fmt.Errorf("wda recents: unknown screen size (session not created?)")
 	}
+	// AppSwitcherPayload wants POINTS; screenSnapshot is physical pixels now.
+	pw, ph := c.toPoints(info.Width, info.Height)
 	// App-switcher gesture approximation (points space).
-	a := AppSwitcherPayload(info.Width, info.Height)
+	a := AppSwitcherPayload(pw, ph)
 	return c.sessionCall(ctx, false, func() error {
 		_, err := c.do(ctx, http.MethodPost, routeActions(c.session), a, nil)
 		return err
@@ -309,8 +318,38 @@ func (c *HTTPClient) Recents(ctx context.Context) error {
 }
 
 func (c *HTTPClient) LaunchApp(ctx context.Context, bundleID string) error {
+	// stopIfRunning=false: resume the existing task instead of killing a
+	// running app (parity with Android's getLaunchIntentForPackage).
 	return c.sessionCall(ctx, false, func() error {
-		_, err := c.do(ctx, http.MethodPost, routeLaunchApp(c.session), LaunchAppPayload(bundleID, true), nil)
+		_, err := c.do(ctx, http.MethodPost, routeLaunchApp(c.session), LaunchAppPayload(bundleID, false), nil)
+		return err
+	})
+}
+
+// ForegroundApp reads /wda/activeAppInfo (Appium WDA) for the frontmost bundle
+// id. A fork without the route yields an error, which the command layer maps
+// to unsupported — callers must not read an error as "nothing is foregrounded".
+func (c *HTTPClient) ForegroundApp(ctx context.Context) (string, error) {
+	var reply struct {
+		BundleID string `json:"bundleId"`
+	}
+	if err := c.sessionCall(ctx, true, func() error {
+		_, err := c.do(ctx, http.MethodGet, routeActiveAppInfo(c.session), nil, &reply)
+		return err
+	}); err != nil {
+		return "", err
+	}
+	if reply.BundleID == "" {
+		return "", fmt.Errorf("wda activeAppInfo: empty bundleId")
+	}
+	return reply.BundleID, nil
+}
+
+// OpenURL posts /session/{id}/url — the W3C navigation endpoint, which WDA
+// implements against the device's default URL handler.
+func (c *HTTPClient) OpenURL(ctx context.Context, url string) error {
+	return c.sessionCall(ctx, false, func() error {
+		_, err := c.do(ctx, http.MethodPost, routeURL(c.session), URLPayload(url), nil)
 		return err
 	})
 }
@@ -377,6 +416,14 @@ func (c *HTTPClient) toPoints(x, y int) (int, int) {
 
 // do issues one HTTP call against WDA, unwrapping the {"value": ...} envelope.
 // data may be nil. Non-2xx replies surface as errors carrying the body tail.
+//
+// A 2xx status is NOT sufficient: WDA (and WebDriver in general) reports
+// command failures inside the JSON body as {"value": {"error": "...", ...}}
+// with HTTP 200 on several routes/forks. Every mutating call passes out=nil,
+// so the envelope check below is the only thing standing between a WDA error
+// and a silent ok=true on the wire (the original bug: tap/swipe/type_text/
+// launch_app "succeeded" while the device did nothing). The check runs for
+// out=nil too — the body is read either way.
 func (c *HTTPClient) do(ctx context.Context, method, path string, payload, out any) ([]byte, error) {
 	var body io.Reader
 	if payload != nil {
@@ -405,17 +452,27 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, payload, out a
 	if resp.StatusCode >= 400 {
 		return raw, fmt.Errorf("wda %s %s: HTTP %d: %s", method, path, resp.StatusCode, tail(raw, 400))
 	}
-	if out == nil {
-		return raw, nil
-	}
 	// WDA wraps replies in {"value": ...}; unwrap when present.
 	var wrap struct {
 		Value json.RawMessage `json:"value"`
 	}
+	unwrapped := raw
 	if err := json.Unmarshal(raw, &wrap); err == nil && len(wrap.Value) > 0 {
-		raw = wrap.Value
+		unwrapped = wrap.Value
 	}
-	if err := json.Unmarshal(raw, out); err != nil {
+	// WDA error envelope: {"value": {"error": "...", "message": "..."}} even on
+	// HTTP 200. Surface it as an error so handlers never see a fake success.
+	var werr struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(unwrapped, &werr); err == nil && werr.Error != "" {
+		return raw, fmt.Errorf("wda %s %s: %s: %s", method, path, werr.Error, werr.Message)
+	}
+	if out == nil {
+		return raw, nil
+	}
+	if err := json.Unmarshal(unwrapped, out); err != nil {
 		// Some endpoints return bare strings/arrays; only error when out expects JSON.
 		return raw, nil
 	}

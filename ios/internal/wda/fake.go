@@ -21,6 +21,9 @@ type Fake struct {
 	PNG       []byte
 	Apps      []App
 	Err       error // when set, every call returns Err
+	// Foreground is the canned ForegroundApp reply; nil error = unsupported
+	// (mirrors a backend that cannot observe the foreground app).
+	Foreground *string
 
 	// Recorded calls.
 	Taps                  []tapCall
@@ -35,6 +38,7 @@ type Fake struct {
 	RecentsCount          int
 	LaunchedApps          []string
 	ListAppsIncludeSystem []bool
+	OpenedURLs            []string
 }
 
 type tapCall struct {
@@ -195,6 +199,29 @@ func (f *Fake) LaunchApp(ctx context.Context, bundleID string) error {
 	}
 	f.mu.Lock()
 	f.LaunchedApps = append(f.LaunchedApps, bundleID)
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *Fake) ForegroundApp(ctx context.Context) (string, error) {
+	if err := f.fail(); err != nil {
+		return "", err
+	}
+	f.mu.Lock()
+	fg := f.Foreground
+	f.mu.Unlock()
+	if fg == nil {
+		return "", ErrUnsupported
+	}
+	return *fg, nil
+}
+
+func (f *Fake) OpenURL(ctx context.Context, url string) error {
+	if err := f.fail(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.OpenedURLs = append(f.OpenedURLs, url)
 	f.mu.Unlock()
 	return nil
 }

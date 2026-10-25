@@ -134,11 +134,13 @@ func TestPressHome(t *testing.T) {
 	}
 }
 
-func TestPressBackIsDeviceError(t *testing.T) {
+// §12: a permanent platform gap is `unsupported`, not `device_error` — the
+// caller must be able to tell "this device cannot ever do it" from "it broke".
+func TestPressBackIsUnsupported(t *testing.T) {
 	f := newFake()
 	_, err := dispatch("press_back", `{}`, f)
-	if errcode.From(err) != errcode.DeviceError {
-		t.Fatalf("want device_error for iOS back, got %v", err)
+	if errcode.From(err) != errcode.Unsupported {
+		t.Fatalf("want unsupported for iOS back, got %v", err)
 	}
 }
 
@@ -155,8 +157,8 @@ func TestPressKeyHomeRoute(t *testing.T) {
 func TestPressKeyBackRoute(t *testing.T) {
 	f := newFake()
 	_, err := dispatch("press_key", `{"key":"back"}`, f)
-	if errcode.From(err) != errcode.DeviceError {
-		t.Fatalf("want device_error, got %v", err)
+	if errcode.From(err) != errcode.Unsupported {
+		t.Fatalf("want unsupported, got %v", err)
 	}
 }
 

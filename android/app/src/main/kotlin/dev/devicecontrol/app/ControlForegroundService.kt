@@ -18,6 +18,7 @@ import dev.devicecontrol.app.net.WsClient
 import dev.devicecontrol.app.storage.CredentialStore
 import dev.devicecontrol.app.storage.DeviceCredential
 import dev.devicecontrol.app.ui.MainActivity
+import dev.devicecontrol.core.accessibility.OverlayCommandIndicator
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -106,7 +107,7 @@ class ControlForegroundService : Service() {
         stateMirrorJob?.cancel()
         val app = applicationContext as ControlApplication
         val handlers = CommandHandlers(app.coreGraph, this)
-        val dispatcher = CommandDispatcher(handlers.dispatch)
+        val dispatcher = CommandDispatcher(handlers.dispatch, OverlayCommandIndicator())
         val client = WsClient(okHttpClient, dispatcher).apply {
             onCredentialWiped = { credentialStore.clear() }
             // 上报给服务端网页：register 帧带 device_info（版本/系统/机型/无障碍/

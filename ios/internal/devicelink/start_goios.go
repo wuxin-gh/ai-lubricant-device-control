@@ -170,26 +170,75 @@ func startGoIOS(ctx context.Context, opts Options) (deviceSession, error) {
 // available.
 func pickDevice(opts Options) (ios.DeviceEntry, error) {
 	list, err := ios.ListDevices()
+	if err == nil {
+		for _, d := range list.DeviceList {
+			if opts.UDID != "" && d.Properties.SerialNumber != opts.UDID {
+				continue
+			}
+			if opts.Transport == "network" && d.Properties.ConnectionType != "Network" {
+				continue
+			}
+			if opts.Transport == "usb" && d.Properties.ConnectionType == "Network" {
+				continue
+			}
+			return enrichWithTunnel(d)
+		}
+	}
+	// usbmuxd knows nothing about the device. A phone that is only reachable
+	// over the LAN (unplugged) still has a live RemotePairing tunnel, so build
+	// its entry from the tunnel-info endpoint instead of failing: that entry
+	// carries Address/Rsd/UserspaceTUN, which every service below needs.
+	if opts.UDID != "" && opts.Transport != "usb" {
+		if d, lerr := LanDeviceEntry(opts.UDID); lerr == nil {
+			return d, nil
+		}
+	}
 	if err != nil {
 		return ios.DeviceEntry{}, fmt.Errorf("list devices: %w", err)
 	}
-	if len(list.DeviceList) == 0 {
-		return ios.DeviceEntry{}, fmt.Errorf("no iOS device found (is usbmuxd running?)")
-	}
-	for _, d := range list.DeviceList {
-		if opts.UDID != "" && d.Properties.SerialNumber != opts.UDID {
-			continue
-		}
-		if opts.Transport == "network" && d.Properties.ConnectionType != "Network" {
-			continue
-		}
-		if opts.Transport == "usb" && d.Properties.ConnectionType == "Network" {
-			continue
-		}
-		return enrichWithTunnel(d)
-	}
 	return ios.DeviceEntry{}, fmt.Errorf("no device matching udid=%q transport=%q",
 		opts.UDID, opts.Transport)
+}
+
+// LanDeviceEntry fabricates a device entry for a phone with no usbmuxd
+// presence, from the local tunnel-info agent. It mirrors enrichWithTunnel but
+// builds the entry itself — GetDeviceWithAddress is useless here since it
+// re-lists usbmuxd. The UserspaceTUN fields are stamped BEFORE the RSD
+// handshake because NewWithAddrPortDevice dials through them.
+//
+// Exported because a host that talks to the device outside a link (install,
+// app listing) needs the same entry, and must not reimplement the stamping.
+func LanDeviceEntry(udid string) (ios.DeviceEntry, error) {
+	host := ios.HttpApiHost()
+	port := ios.HttpApiPort()
+	info, err := tunnel.TunnelInfoForDevice(udid, host, port)
+	if err != nil {
+		return ios.DeviceEntry{}, fmt.Errorf("lan: no RSD tunnel for %s at %s:%d: %w", udid, host, port, err)
+	}
+	d := ios.DeviceEntry{
+		Properties: ios.DeviceProperties{
+			SerialNumber:   udid,
+			ConnectionType: "Network",
+			// No usbmuxd DeviceID on purpose: it marks the entry as LAN-only.
+			// The iOS version comes from the RSD handshake itself (go-ios's
+			// fork reads it back off the provider), so nothing else is needed.
+		},
+		Address:          info.Address,
+		UserspaceTUN:     info.UserspaceTUN,
+		UserspaceTUNHost: host,
+		UserspaceTUNPort: info.UserspaceTUNPort,
+	}
+	rsdService, err := ios.NewWithAddrPortDevice(info.Address, info.RsdPort, d)
+	if err != nil {
+		return ios.DeviceEntry{}, fmt.Errorf("lan: connect RSD for %s at [%s]:%d: %w", udid, info.Address, info.RsdPort, err)
+	}
+	defer rsdService.Close()
+	rsdProvider, err := rsdService.Handshake()
+	if err != nil {
+		return ios.DeviceEntry{}, fmt.Errorf("lan: RSD handshake for %s at [%s]:%d: %w", udid, info.Address, info.RsdPort, err)
+	}
+	d.Rsd = rsdProvider
+	return d, nil
 }
 
 // enrichWithTunnel fills the RSD tunnel details on iOS 17+ devices, which the
@@ -208,32 +257,36 @@ func enrichWithTunnel(d ios.DeviceEntry) (ios.DeviceEntry, error) {
 	if d.SupportsRsd() {
 		return d, nil // already has an RSD provider (e.g. injected by a caller)
 	}
-	if d.Properties.ConnectionType == "Network" {
-		// Network devices can't tunnel; go-ios reaches them over the LAN address.
-		return d, nil
-	}
-
-	version, err := ios.GetProductVersion(d)
-	if err != nil {
-		return ios.DeviceEntry{}, fmt.Errorf("read iOS version for %s: %w", d.Properties.SerialNumber, err)
-	}
-	if version.Major() < 17 {
-		// iOS <17 tunnels over usbmuxd directly; no RSD tunnel is involved.
-		return d, nil
-	}
 
 	udid := d.Properties.SerialNumber
 	host := ios.HttpApiHost()
 	port := ios.HttpApiPort()
 
+	// Ask for a tunnel FIRST, for USB and Network alike: a Network-type usbmuxd
+	// entry may well be the same phone the node's LAN agent tunnels
+	// (Wi-Fi-synced). Only when there is no tunnel do we fall back.
 	info, err := tunnel.TunnelInfoForDevice(udid, host, port)
 	if err != nil {
-		if errors.Is(err, tunnel.ErrTunnelNotFound) {
-			return ios.DeviceEntry{}, fmt.Errorf(
-				"no RSD tunnel for iOS %s device %s: the go-ios tunnel agent has not started it yet (userspace tunnels need iOS 17.4+; 17.0–17.3 require a root tunnel agent)",
-				version.String(), udid)
+		if !errors.Is(err, tunnel.ErrTunnelNotFound) {
+			return ios.DeviceEntry{}, fmt.Errorf("query tunnel info for %s at %s:%d: %w", udid, host, port, err)
 		}
-		return ios.DeviceEntry{}, fmt.Errorf("query tunnel info for %s at %s:%d: %w", udid, host, port, err)
+		if d.Properties.ConnectionType == "Network" {
+			// Legacy Wi-Fi-sync device with no LAN tunnel: go-ios reaches its
+			// lockdown services over the network mux. iOS 17+ services
+			// (testmanagerd) will fail later with a clearer message.
+			return d, nil
+		}
+		version, verr := ios.GetProductVersion(d)
+		if verr == nil && version.Major() < 17 {
+			// iOS <17 tunnels over usbmuxd directly; no RSD tunnel is involved.
+			return d, nil
+		}
+		if verr != nil {
+			return ios.DeviceEntry{}, fmt.Errorf("read iOS version for %s: %w", udid, verr)
+		}
+		return ios.DeviceEntry{}, fmt.Errorf(
+			"no RSD tunnel for iOS %s device %s: the go-ios tunnel agent has not started it yet (userspace tunnels need iOS 17.4+; 17.0–17.3 require a root tunnel agent)",
+			version.String(), udid)
 	}
 
 	// Replicate go-ios CLI deviceWithRsdProvider: dial the device over the
@@ -253,14 +306,9 @@ func enrichWithTunnel(d ios.DeviceEntry) (ios.DeviceEntry, error) {
 	if err != nil {
 		return ios.DeviceEntry{}, fmt.Errorf("RSD handshake for %s at [%s]:%d: %w", udid, info.Address, info.RsdPort, err)
 	}
-	enriched, err := ios.GetDeviceWithAddress(udid, info.Address, rsdProvider)
-	if err != nil {
-		return ios.DeviceEntry{}, fmt.Errorf("resolve device %s with RSD address: %w", udid, err)
-	}
-	// GetDeviceWithAddress re-lists the device fresh, so carry the userspace TUN
-	// fields over — otherwise ConnectTUNDevice can't reach the userspace agent.
-	enriched.UserspaceTUN = d.UserspaceTUN
-	enriched.UserspaceTUNHost = d.UserspaceTUNHost
-	enriched.UserspaceTUNPort = d.UserspaceTUNPort
-	return enriched, nil
+	// The entry may be a LAN fabrication (no usbmuxd record to re-list), so
+	// stamp the provider here instead of re-resolving through GetDeviceWithAddress.
+	d.Address = info.Address
+	d.Rsd = rsdProvider
+	return d, nil
 }
